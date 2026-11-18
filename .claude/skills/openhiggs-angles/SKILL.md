@@ -6,12 +6,17 @@ description: Make many camera angles of one photo (orbit, turnaround, coverage, 
 # OpenHiggs angles
 
 One image in → many new camera views → (optional) one camera-move clip per view.
-Everything runs on the user's ComfyUI through `scripts/openhiggs.py` (standard library; Pillow optional for the contact sheet).
+Everything runs on the user's ComfyUI through `scripts/openhiggs.py` (standard library; Pillow optional for the contact sheet) and one workflow, `workflows/openhiggs.api.json`:
+
+- nodes 1–17: the angle stage (Qwen-Image-Edit-2511 + Multiple-Angles LoRA);
+- nodes 101–153: the move stage (LTX-2), whose start frame is the angle output (node 16), or node 101 for a move from an existing image.
+
+Each job sends only the nodes it needs: `angles` the angle stage, `move` the move stage, `pipeline` both in one job per angle (image and clip together). The file also loads in ComfyUI as is, for running the full chain by hand.
 
 ## 1. Check the server once
 
 - Server URL: `--server` or `$COMFY_URL` (default `http://127.0.0.1:8188`). If you can't reach it, ask the user for the URL. A cloud session can't reach the user's localhost: they need a public URL, or run the skill on their own machine.
-- The models must already be on the server. File names are in `workflows/*.api.json`: `qwen_image_edit_2511_bf16`, `qwen-image-edit-2511-multiple-angles-lora`, `Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16`, `qwen_2.5_vl_7b`, `qwen_image_vae`; and for moves `ltx-2-19b-dev-fp8`, `ltx-2-19b-distilled-lora-384`, `gemma_3_12B_it_fp4_mixed`, `ltx-2-spatial-upscaler-x2-1.0`, plus whichever `ltx-2-19b-lora-camera-control-*` LoRAs the moves need. If ComfyUI rejects the workflow, the script prints the node errors: tell the user which file is missing.
+- The models must already be on the server. File names are in `workflows/openhiggs.api.json`: `qwen_image_edit_2511_bf16`, `qwen-image-edit-2511-multiple-angles-lora`, `Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16`, `qwen_2.5_vl_7b`, `qwen_image_vae`; and for moves `ltx-2-19b-dev-fp8`, `ltx-2-19b-distilled-lora-384`, `gemma_3_12B_it_fp4_mixed`, `ltx-2-spatial-upscaler-x2-1.0`, plus whichever `ltx-2-19b-lora-camera-control-*` LoRAs the moves need. If ComfyUI rejects the workflow, the script prints the node errors: tell the user which file is missing.
 
 ## 2. Pick the angles
 

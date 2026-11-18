@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """OpenHiggs angles: many camera angles from one image, plus an optional camera move.
 
-Drives a ComfyUI server over its HTTP API with the two bundled workflows:
-  workflows/angle.api.json  Qwen-Image-Edit-2511 + Multiple-Angles LoRA (one new view per run)
-  workflows/move.api.json   LTX-2 19B image-to-video + camera-control LoRA (one clip per run)
+Drives a ComfyUI server over its HTTP API with one bundled workflow, workflows/openhiggs.api.json:
+  nodes 1-17     angle stage: Qwen-Image-Edit-2511 + Multiple-Angles LoRA (one new view)
+  nodes 101-153  move stage:  LTX-2 19B image-to-video + camera-control LoRA (one clip);
+                 its start frame is the angle output (node 16), or node 101 for move-only runs.
+Each job sends only the nodes its outputs need.
 
 Standard library only (Pillow is optional, for the contact sheet).
 
@@ -69,9 +71,25 @@ DEFAULT_SCENE = "the subject holds the moment, subtle natural motion"
 LOOK = "35mm lens, natural perspective. cinematic, film still quality"
 
 
-def load_wf(name):
-    with open(os.path.join(WF_DIR, name)) as f:
+WORKFLOW = "openhiggs.api.json"
+ANGLE_OUT, MOVE_OUT = "17", "153"
+
+
+def load_wf():
+    with open(os.path.join(WF_DIR, WORKFLOW)) as f:
         return json.load(f)
+
+
+def subgraph(wf, *outputs):
+    """Keep only the nodes the given output nodes depend on."""
+    keep, todo = set(), list(outputs)
+    while todo:
+        n = todo.pop()
+        if n in keep:
+            continue
+        keep.add(n)
+        todo += [v[0] for v in wf[n]["inputs"].values() if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)]
+    return {k: v for k, v in wf.items() if k in keep}
 
 
 def angle_prompt(az, el, dist):
@@ -88,8 +106,7 @@ def parse_angle(s):
     return tuple(parts)
 
 
-def patch_angle(image_name, az, el, dist, seed, quality, prefix):
-    wf = load_wf("angle.api.json")
+def patch_angle(wf, image_name, az, el, dist, seed, quality, prefix):
     wf["1"]["inputs"]["image"] = image_name
     wf["10"]["inputs"]["prompt"] = angle_prompt(az, el, dist)
     wf["15"]["inputs"]["seed"] = seed
@@ -100,27 +117,31 @@ def patch_angle(image_name, az, el, dist, seed, quality, prefix):
     return wf
 
 
-def patch_move(image_name, move, scene, seed, seconds, fps, width, height, prefix, negative=None):
+def patch_move(wf, image_name, move, scene, seed, seconds, fps, width, height, prefix, negative=None):
+    """image_name=None: the start frame is the angle stage's output (same job)."""
     if move not in MOVES:
         sys.exit(f"unknown move '{move}'. Choose from: {', '.join(MOVES)}")
     lora, phrase = MOVES[move]
-    wf = load_wf("move.api.json")
-    wf["1"]["inputs"]["image"] = image_name
-    wf["2"]["inputs"]["resize_type.width"] = width
-    wf["2"]["inputs"]["resize_type.height"] = height
-    if lora:
-        wf["11"]["inputs"]["lora_name"] = lora
-        wf["11"]["inputs"]["strength_model"] = 1
+    if image_name is None:
+        wf["102"]["inputs"]["input"] = ["16", 0]
     else:
-        wf["11"]["inputs"]["strength_model"] = 0
-    wf["20"]["inputs"]["text"] = f"{scene.rstrip('. ')}. {phrase} {LOOK}"
+        wf["101"]["inputs"]["image"] = image_name
+        wf["102"]["inputs"]["input"] = ["101", 0]
+    wf["102"]["inputs"]["resize_type.width"] = width
+    wf["102"]["inputs"]["resize_type.height"] = height
+    if lora:
+        wf["111"]["inputs"]["lora_name"] = lora
+        wf["111"]["inputs"]["strength_model"] = 1
+    else:
+        wf["111"]["inputs"]["strength_model"] = 0
+    wf["120"]["inputs"]["text"] = f"{scene.rstrip('. ')}. {phrase} {LOOK}"
     if negative:
-        wf["21"]["inputs"]["text"] = negative
-    wf["22"]["inputs"]["value"] = fps
+        wf["121"]["inputs"]["text"] = negative
+    wf["122"]["inputs"]["value"] = fps
     frames = round(seconds * fps / 8) * 8 + 1  # LTX needs 8n+1 frames
-    wf["24"]["inputs"]["value"] = max(frames, 9)
-    wf["34"]["inputs"]["noise_seed"] = seed
-    wf["53"]["inputs"]["filename_prefix"] = prefix
+    wf["124"]["inputs"]["value"] = max(frames, 9)
+    wf["134"]["inputs"]["noise_seed"] = seed
+    wf["153"]["inputs"]["filename_prefix"] = prefix
     return wf
 
 
@@ -216,7 +237,8 @@ def contact_sheet(paths, labels, dest):
     return dest
 
 
-def run_angles(a, comfy):
+def run_angles(a, comfy, with_move=False):
+    """Angles only, or (with_move) angle + move in one job per angle."""
     if a.angle:
         angles = [parse_angle(s) for s in a.angle]
     else:
@@ -227,7 +249,12 @@ def run_angles(a, comfy):
     results, manifest = [], []
     for i, (az, el, dist) in enumerate(angles, 1):
         stem = os.path.join(a.out, f"angle_{i:02d}_{slug(az, el, dist)}")
-        wf = patch_angle(image_name, az, el, dist, seed, a.quality, f"openhiggs/angle_{i:02d}")
+        wf = patch_angle(load_wf(), image_name, az, el, dist, seed, a.quality, f"openhiggs/angle_{i:02d}")
+        if with_move:
+            wf = subgraph(patch_move(wf, None, a.move, a.scene, seed, a.seconds, a.fps, a.width, a.height,
+                                     f"openhiggs/move_{i:02d}_{a.move}", a.negative), ANGLE_OUT, MOVE_OUT)
+        else:
+            wf = subgraph(wf, ANGLE_OUT)
         entry = {"index": i, "azimuth": az, "elevation": el, "distance": dist,
                  "prompt": angle_prompt(az, el, dist), "seed": seed}
         if a.dry_run:
@@ -239,7 +266,7 @@ def run_angles(a, comfy):
             print(f"[{i}/{len(angles)}] {entry['prompt']} ...", flush=True)
             files = comfy.fetch_outputs(comfy.wait(comfy.queue(wf), a.timeout), stem)
             entry["files"] = files
-            results += [(f, f"{i:02d} {az} / {el} / {dist}") for f in files if not f.endswith(".json")]
+            results += [(f, f"{i:02d} {az} / {el} / {dist}") for f in files if f.endswith((".png", ".jpg", ".webp"))]
             print("   ->", ", ".join(files))
         manifest.append(entry)
     with open(os.path.join(a.out, "angles.json"), "w") as f:
@@ -256,12 +283,12 @@ def run_move(a, comfy, image):
     seed = a.seed if a.seed is not None else random.randrange(2**31)
     image_name = "input.png" if a.dry_run else comfy.upload(image)
     stem = os.path.join(a.out, f"move_{a.move}_{os.path.splitext(os.path.basename(image))[0]}")
-    wf = patch_move(image_name, a.move, a.scene, seed, a.seconds, a.fps, a.width, a.height,
-                    f"openhiggs/move_{a.move}", a.negative)
+    wf = subgraph(patch_move(load_wf(), image_name, a.move, a.scene, seed, a.seconds, a.fps, a.width, a.height,
+                             f"openhiggs/move_{a.move}", a.negative), MOVE_OUT)
     if a.dry_run:
         with open(stem + ".api.json", "w") as f:
             json.dump(wf, f, indent=2)
-        print(f"dry-run move {a.move}: {wf['20']['inputs']['text']}  ({wf['24']['inputs']['value']} frames)")
+        print(f"dry-run move {a.move}: {wf['120']['inputs']['text']}  ({wf['124']['inputs']['value']} frames)")
         return
     print(f"move {a.move} from {image} ...", flush=True)
     print("   ->", ", ".join(comfy.fetch_outputs(comfy.wait(comfy.queue(wf), a.timeout), stem)))
@@ -315,11 +342,7 @@ def main():
     elif a.cmd == "move":
         run_move(a, comfy, a.image)
     else:
-        frames = run_angles(a, comfy)
-        if a.dry_run:
-            run_move(a, comfy, a.image)
-        for f in frames:
-            run_move(a, comfy, f)
+        run_angles(a, comfy, with_move=True)
 
 
 if __name__ == "__main__":
