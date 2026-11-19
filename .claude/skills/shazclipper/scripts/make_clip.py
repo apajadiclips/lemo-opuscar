@@ -278,7 +278,7 @@ if __name__ == "__main__":
         sys.exit(0)
     vid = f"{WORK}/{NAME}_video.mp4"
     ff = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{S.W}x{S.H}", "-r", str(FPS), "-i", "-",
-                           "-c:v", "libx264", "-crf", "17", "-preset", "slow", "-pix_fmt", "yuv420p", vid], stdin=subprocess.PIPE)
+                           "-c:v", "libx264", "-crf", "20", "-preset", "slow", "-pix_fmt", "yuv420p", vid], stdin=subprocess.PIPE)
     with Pool(int(os.environ.get("WORKERS", 4))) as p:
         for im in p.imap(frame, range(int(DUR * FPS)), chunksize=6): ff.stdin.write(im.tobytes())
     ff.stdin.close(); ff.wait()

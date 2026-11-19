@@ -22,7 +22,7 @@ The user runs the clipper channel **@shazclipper** (Malaysian; talks Malay, read
 | Shape | cover → hook (3 s, his own payoff line, `TONTON SAMPAI HABIS` pill low in the safe zone) → build-up → moment → optional slow replay (`REPLAY 0.5×`, red corners) → end card `MAU LAGI?` + `FOLLOW @shazclipper` |
 | Length | **61–75 s** (TikTok Creator Rewards needs > 60 s; also fine for Reels/Shorts). A 30–45 s Shorts cut is optional |
 | Loudness | −14 LUFS, true peak ≤ −1.5 dB |
-| Sexual content | **always blurred**: `make_clip.py` runs NudeNet (bundled model, offline) on every 1/3 s of the clip and the cover frame, and blurs the gameplay ±0.8 s around any exposed-nudity detection (`nsfw.json`). Add `"blur": [[a, b], …]` (VOD seconds) for anything it misses: kissing/sex scenes without nudity are not detected, so check suggestive scenes by eye. Never use a flagged frame as a cover. For a whole VOD, map it once (keyframes + NudeNet, ~27 ms/frame) and keep clips away from flagged scenes |
+| Sexual content | **always blurred**: `make_clip.py` runs NudeNet (bundled model, offline) on every 1/3 s of the clip and the cover frame, and blurs the gameplay ±0.8 s around any exposed-nudity detection (`nsfw.json`). Add `"blur": [[a, b], …]` (VOD seconds) for anything it misses: kissing/sex scenes without nudity are not detected, so check suggestive scenes by eye. Never use a flagged frame as a cover. For a whole VOD, map it once: `scripts/nsfw_map.py <vod.mp4> ana/nsfw_map.json` (keyframes + NudeNet, ~27 ms/frame), and keep clips and covers away from flagged scenes |
 
 Don'ts the user already rejected: two-line subtitles, green/mint words inside subtitles, Malay subtitle lines, bilingual lines, a second @shazclipper badge or a bottom watermark, background music or ambience, a gameplay band with a blurred bottom, Matcha Squishy (personal-use only).
 
@@ -72,7 +72,7 @@ Network: the `lemo-opuscar` environment allows drive.google.com, drive.userconte
    .venv/bin/python .claude/skills/shazclipper/scripts/cover_preview.py films/<name>/clip0{2,3,4}/spec.json --sheet films/<name>/covers.jpg
    ```
    Send the sheet plus each `<name>_cover.mp4` (the cover with its voice). Keep `cover.say` short and without commas: a comma adds a pause (~0.4 s) and a cover over ~1.8 s feels slow. Match the voice to the cover text.
-7. **Review stills, then render:**
+7. **Review stills, then render** (several clips: `sh .claude/skills/shazclipper/scripts/run_batch.sh films/<name>/clip02 films/<name>/clip03 …`, which frees each clip's frame cache after it renders):
    ```sh
    .venv/bin/python .claude/skills/shazclipper/scripts/make_clip.py films/<name>/clip01/spec.json --stills 1 10 30 60
    .venv/bin/python .claude/skills/shazclipper/scripts/make_clip.py films/<name>/clip01/spec.json
