@@ -201,11 +201,9 @@ def cover_frame(t):
     if blurred(st): game = game.filter(ImageFilter.GaussianBlur(45))
     base = S.compose(cam_panel(img, 1.1 + .05 * k), game).convert("RGBA")
     lines = COVER.get("lines") or SPEC.get("hook", {}).get("lines", [])
-    for i, line in enumerate(lines):
-        S.moment(base, line, S.GAME_Y + 200 + i * 140, 104 if i == 0 else 136, S.back(S.seg(t, .05 * i, .2 + .05 * i)), S.WHT if i == 0 else S.MINT)
-    im = base.convert("RGB")
-    if t < .1: im = Image.blend(im, Image.new("RGB", (S.W, S.H), S.WHT), .5 * (1 - t / .1))
-    return im
+    for i, line in enumerate(lines):     # full size and readable from frame 0 (it is the platforms' default thumbnail), then a small punch
+        S.moment(base, line, S.GAME_Y + 200 + i * 140, 104 if i == 0 else 136, S.lerp(1.12, 1.0, S.eo(S.seg(t, 0, .3))), S.WHT if i == 0 else S.MINT)
+    return base.convert("RGB")           # no white flash on frame 0: it washed out the thumbnail
 
 def frame(n):
     t = n / FPS
