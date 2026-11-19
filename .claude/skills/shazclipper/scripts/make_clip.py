@@ -26,15 +26,31 @@ if SPEC.get("moment_words"): S.MOMENT_WORDS = S.MOMENT_WORDS + "|" + SPEC["momen
 SEGS = SPEC["segments"]                       # [{src: [a, b], speed: 1, label: hook|clip|replay}]
 for k, g in enumerate(SEGS): g["k"] = k; g["dur"] = (g["src"][1] - g["src"][0]) / g.get("speed", 1.0)
 END = 2.6 if SPEC.get("end_card", True) else 0
-DUR = sum(g["dur"] for g in SEGS) + END
-o = 0.0
+def run(cmd, **kw): subprocess.run(cmd, check=True, **kw)
+
+# ---------- 0. cover: a 1-s+ title frame with a voice saying the hook (edge-tts) ----------
+COVER = SPEC.get("cover")                     # {lines: [...], say: "...", frame: vod_seconds, voice: "id-ID-ArdiNeural", rate: "+20%"}
+COVER_DUR = 0.0
+def cover_tts():
+    os.makedirs(f"{WORK}/audio", exist_ok=True); mp3, wav_ = f"{WORK}/audio/cover_tts.mp3", f"{WORK}/audio/cover_tts.wav"
+    if not os.path.exists(wav_):
+        say = COVER.get("say") or " ".join(COVER.get("lines") or SPEC.get("hook", {}).get("lines", []))
+        env = dict(os.environ, SSL_CERT_FILE=os.environ.get("SSL_CERT_FILE", "/root/.ccr/ca-bundle.crt"))
+        cmd = [os.path.join(LIB, ".venv", "bin", "edge-tts"), "--voice", COVER.get("voice", "id-ID-ArdiNeural"), f"--rate={COVER.get('rate', '+20%')}", "--text", say, "--write-media", mp3]
+        if os.environ.get("HTTPS_PROXY"): cmd[1:1] = ["--proxy", os.environ["HTTPS_PROXY"]]   # aiohttp ignores the proxy env by itself
+        run(cmd, env=env)
+        trim = "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse"
+        run(["ffmpeg", "-v", "error", "-y", "-i", mp3, "-af", trim, "-ac", "2", "-ar", "48000", wav_])
+    with wave.open(wav_) as w: return w.getnframes() / w.getframerate()
+if COVER: COVER_DUR = max(COVER.get("min", 1.0), cover_tts() + .2)
+DUR = COVER_DUR + sum(g["dur"] for g in SEGS) + END
+o = COVER_DUR
 for g in SEGS: g["o0"] = o; o += g["dur"]
 SW, SH = SPEC.get("source_size", [1920, 1080])
 ENHANCE = SPEC.get("enhance") or (ENH_HD if SH >= 1000 else ENH_LOW)
 CAM = SPEC["cam"]                             # facecam box in source px [x0, y0, x1, y1]
 GAME = SPEC.get("game", {})                   # crop width and centre keyframes (source time -> cx, cy)
 
-def run(cmd): subprocess.run(cmd, check=True)
 def seg_at(t):
     for g in SEGS:
         if t < g["o0"] + g["dur"]: return g, (t - g["o0"])
@@ -42,6 +58,9 @@ def seg_at(t):
 
 # ---------- 1. enhanced frames per segment ----------
 def prep_frames():
+    if COVER and not os.path.exists(f"{WORK}/frames/cover.jpg"):
+        os.makedirs(f"{WORK}/frames", exist_ok=True)
+        run(["ffmpeg", "-v", "error", "-y", "-ss", str(COVER.get("frame", SEGS[0]["src"][0])), "-i", SPEC["source"], "-frames:v", "1", "-vf", ENHANCE, "-q:v", "2", f"{WORK}/frames/cover.jpg"])
     for g in SEGS:
         d = f"{WORK}/frames/seg{g['k']:02d}"
         if os.path.isdir(d) and len(os.listdir(d)) >= int((g["src"][1] - g["src"][0]) * SFPS) - 2: continue
@@ -123,8 +142,23 @@ def cam_panel(img, zoom):
     return S.panel(img, (cx - hw, cy - hh, cx + hw, cy + hh), S.W, S.CAM_H, 1.2)
 
 WORDS, CH, BIG = [], [], []
+def cover_frame(t):
+    """The cover: frozen dramatic frame, slow push, the hook in big Titan One, a flash on frame 0."""
+    img = Image.open(f"{WORK}/frames/cover.jpg").convert("RGB"); st = COVER.get("frame", SEGS[0]["src"][0])
+    k = S.seg(t, 0, COVER_DUR)
+    game = ImageEnhance.Brightness(game_panel(img, st, 1.12 + .08 * k)).enhance(.8)
+    base = S.compose(cam_panel(img, 1.1 + .05 * k), game).convert("RGBA")
+    lines = COVER.get("lines") or SPEC.get("hook", {}).get("lines", [])
+    for i, line in enumerate(lines):
+        S.moment(base, line, S.GAME_Y + 200 + i * 140, 104 if i == 0 else 136, S.back(S.seg(t, .05 * i, .2 + .05 * i)), S.WHT if i == 0 else S.MINT)
+    im = base.convert("RGB")
+    if t < .1: im = Image.blend(im, Image.new("RGB", (S.W, S.H), S.WHT), .5 * (1 - t / .1))
+    return im
+
 def frame(n):
-    t = n / FPS; end = END and t >= DUR - END
+    t = n / FPS
+    if t < COVER_DUR: return cover_frame(t)
+    end = END and t >= DUR - END
     g, lt = seg_at(min(t, DUR - END - 1e-3)) if END else seg_at(t)
     if end: lt = g["dur"] - 1e-3
     st = g["src"][0] + lt * g.get("speed", 1.0); img = src_img(g, lt); lab = g.get("label", "clip")
@@ -141,12 +175,13 @@ def frame(n):
         d.text((S.SAFE[0] + 94, S.GAME_Y + 93), f"REPLAY {g.get('speed', .5):g}×", font=S.F(34), fill=S.WHT, anchor="lm")
     if end: d.rectangle((0, S.GAME_Y, S.W, S.H), fill=(0, 0, 0, int(150 * S.seg(t, DUR - END, DUR - END + .4))))
     base = im.convert("RGBA")
-    hook = SPEC.get("hook")
-    if hook and t < SPEC.get("hook_dur", 3.0):            # hook: Titan One mint, in the safe zone, over the gameplay top
-        for i, line in enumerate(hook["lines"]):
-            S.moment(base, line, S.GAME_Y + 130 + i * 118, 90 if i == 0 else 120, S.back(S.seg(t, .1 * i, .25 + .1 * i)))
+    hook = SPEC.get("hook"); th = t - COVER_DUR
+    in_hook = hook and 0 <= th < SPEC.get("hook_dur", 3.0)
+    if in_hook:                                            # hook: Titan One mint, in the safe zone (lines only without a cover)
+        for i, line in enumerate([] if COVER else hook["lines"]):
+            S.moment(base, line, S.GAME_Y + 130 + i * 118, 90 if i == 0 else 120, S.back(S.seg(th, .1 * i, .25 + .1 * i)))
         if hook.get("cta"):
-            d2 = ImageDraw.Draw(base); s = hook["cta"]; tw = d2.textlength(s, font=S.F(32)); y = S.GAME_Y + 100 + len(hook["lines"]) * 118 + 30
+            d2 = ImageDraw.Draw(base); s = hook["cta"]; tw = d2.textlength(s, font=S.F(32)); y = S.SAFE[3] - 110 if COVER else S.GAME_Y + 100 + len(hook["lines"]) * 118 + 30   # with a cover the subtitles run at the top: the pill goes low
             d2.rounded_rectangle((S.SAFE_CX - tw / 2 - 26, y, S.SAFE_CX + tw / 2 + 26, y + 60), 30, fill=S.RED + (235,))
             d2.text((S.SAFE_CX, y + 30), s, font=S.F(32), fill=S.WHT, anchor="mm")
     for r in SPEC.get("reactions", []):                    # [{t0, t1, text}] in clip time: a moment line over the facecam
@@ -156,18 +191,21 @@ def frame(n):
         kk = S.back(S.seg(t, DUR - END + .5, DUR - END + .8)); w2 = int(680 * kk); d2 = ImageDraw.Draw(base)
         d2.rounded_rectangle((S.SAFE_CX - w2 / 2, S.GAME_Y + 390, S.SAFE_CX + w2 / 2, S.GAME_Y + 496), 53, fill=S.MINT + (255,))
         if kk > .7: d2.text((S.SAFE_CX, S.GAME_Y + 443), "FOLLOW " + S.CHANNEL, font=S.F(52), fill=S.BLK, anchor="mm")
-    elif not (hook and t < SPEC.get("hook_dur", 3.0)):
+    elif not (in_hook and not COVER):
         for c in CH:
             if c[0]["c0"] <= t < c[0]["c1"]:
                 S.subtitle(base, t, " ".join(x["w"] for x in c), None, times=[x["t0"] for x in c], t_on=c[0]["t0"])
     im = base.convert("RGB")
-    for g2 in SEGS[1:]:
+    for g2 in (SEGS if COVER else SEGS[1:]):
         if g2["o0"] <= t < g2["o0"] + .08: im = Image.blend(im, Image.new("RGB", (S.W, S.H), S.WHT), .3 * (1 - (t - g2["o0"]) / .08))
     return im
 
 def mix(voice):
     buf = voice.copy()
-    for g in SEGS[1:]: sfx.add(buf, sfx.whoosh(.3), g["o0"] - .15, .3)
+    if COVER:                                              # the cover: a hit on frame 0 and the voice saying the hook
+        sfx.add(buf, sfx.thump(f=55), 0.0, .55)
+        tts = read_wav(f"{WORK}/audio/cover_tts.wav"); n = min(len(tts), len(buf) - 2400); buf[2400:2400 + n] += tts[:n] * 1.6
+    for g in (SEGS if COVER else SEGS[1:]): sfx.add(buf, sfx.whoosh(.3), g["o0"] - .15, .3)
     for g in SEGS:
         if g.get("label") == "replay": sfx.add(buf, sfx.whoosh(.6), g["o0"] - .3, .4)
     for b in BIG: sfx.add(buf, sfx.thump(f=60), b, .3)
