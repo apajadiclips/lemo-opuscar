@@ -281,7 +281,8 @@ if __name__ == "__main__":
     os.makedirs(WORK, exist_ok=True); prep_frames()
     hits = scan_nsfw(); print(f"nsfw check: {len(hits)} flagged frames -> blur {[(round(a, 1), round(b, 1)) for a, b in BLUR]}")
     prep_voice()
-    voice = build_voice(); WORDS = prep_words(voice)
+    voice = build_voice()
+    WORDS = prep_words(voice) if SPEC.get("subtitles", True) else []   # "subtitles": false skips Whisper and draws no subtitles
     fixes = {k.lower(): v for k, v in SPEC.get("fix_words", {}).items()}   # words Whisper mishears: {"menrobos": "menerobos"}
     for x in WORDS:
         core = re.sub(r"[^\w-]", "", x["w"]).lower()
