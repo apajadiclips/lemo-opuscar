@@ -111,12 +111,17 @@ def prep_voice():
         else: os.replace(raw, voc)
 def read_wav(p):
     with wave.open(p) as w: return np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").reshape(-1, w.getnchannels()).astype(np.float64) / 32768
-def build_voice():
-    """The clip's voice track: segments at speed 1 keep his voice; slowed replays are voiceless (a whoosh in the mix)."""
-    buf = np.zeros((int(DUR * 48000), 2))
+def build_voice(with_bg=False):
+    """The clip's voice track: segments at speed 1 keep his voice; slowed replays are voiceless (a whoosh in the mix).
+    with_bg: add the game's own sound (Demucs' other stems) quietly under the voice ("back_sound" level, default 0.18 = about -15 dB)."""
+    buf = np.zeros((int(DUR * 48000), 2)); lvl = float(SPEC.get("back_sound", .18))
     for g in SEGS:
         if abs(g.get("speed", 1.0) - 1) > .01: continue
-        v = read_wav(f"{WORK}/audio/seg{g['k']:02d}_voice.wav"); s = int(g["o0"] * 48000); n = min(len(v), len(buf) - s)
+        v = read_wav(f"{WORK}/audio/seg{g['k']:02d}_voice.wav")
+        bgp = f"{WORK}/audio/seg{g['k']:02d}_voice_bg.wav"
+        if with_bg and lvl > 0 and os.path.exists(bgp):
+            b = read_wav(bgp); n0 = min(len(v), len(b)); v = v[:n0] + b[:n0] * lvl
+        s = int(g["o0"] * 48000); n = min(len(v), len(buf) - s)
         fade = np.ones(n); m = min(480, n // 2); fade[:m] = np.linspace(0, 1, m); fade[-m:] = np.linspace(1, 0, m)
         buf[s:s + n] += v[:n] * fade[:, None]
     return buf
@@ -127,7 +132,7 @@ def prep_words(voice):
     if os.path.exists(p): return json.load(open(p))
     from faster_whisper import WhisperModel
     mono = voice.mean(1); x = mono[::3].astype(np.float32)                    # 48 kHz -> 16 kHz
-    m = WhisperModel(SPEC.get("whisper_model", "medium"), device="cpu", compute_type="int8")
+    m = WhisperModel(SPEC.get("whisper_model", os.environ.get("WHISPER_CLIP_MODEL", "large-v3-turbo")), device="cpu", compute_type="int8")
     segs, _ = m.transcribe(x, language=SPEC.get("lang", "id"), word_timestamps=True, beam_size=5)
     words = [dict(w=w.word.strip(), t0=round(w.start, 2), t1=round(w.end, 2)) for s in segs for w in s.words if w.word.strip()]
     words = [w for w in words if not re.fullmatch(r"\W*", w["w"])]
@@ -167,8 +172,24 @@ def game_panel(img, st, zoom):
     cx = keyed(st, "cx", SW * .45); cy = keyed(st, "cy", SH * .5)
     y0 = S.clamp(cy - .45 * h, 0, SH - h); x0 = S.clamp(cx - w / 2, 0, SW - w)
     return lift_dark(S.panel(img, (x0, y0, x0 + w, y0 + h), S.W, S.GAME_H, 1.1))
+_SR = None
+def ai_upscale(im):
+    """Real-ESRGAN realesr-general-x4v3 (ONNX, CPU): x4 super-resolution, one session per worker process."""
+    global _SR
+    if _SR is None:
+        import onnxruntime as ort
+        so = ort.SessionOptions(); so.intra_op_num_threads = int(os.environ.get("SR_THREADS", 1))
+        _SR = ort.InferenceSession(os.path.join(os.path.dirname(HERE), "models", "realesr-general-x4v3.onnx"), so, providers=["CPUExecutionProvider"])
+    x = np.asarray(im, dtype=np.float32).transpose(2, 0, 1)[None] / 255
+    y = _SR.run(None, {"img": x})[0][0].clip(0, 1).transpose(1, 2, 0)
+    return Image.fromarray((y * 255 + .5).astype(np.uint8))
 def cam_panel(img, zoom):
-    x0, y0, x1, y1 = CAM; cx, cy = (x0 + x1) / 2, (y0 + y1) / 2; hw, hh = (x1 - x0) / 2 / zoom, (y1 - y0) / 2 / zoom
+    x0, y0, x1, y1 = CAM
+    if SPEC.get("ai_face", True):            # AI on the facecam: the crop is upscaled ~3.3x, so this is where it shows
+        up = ai_upscale(img.crop(tuple(int(v) for v in CAM))); k = up.width / (x1 - x0)
+        cx, cy = up.width / 2, up.height / 2; hw, hh = up.width / 2 / zoom, up.height / 2 / zoom
+        return S.panel(up, (cx - hw, cy - hh, cx + hw, cy + hh), S.W, S.CAM_H, 1.0)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2; hw, hh = (x1 - x0) / 2 / zoom, (y1 - y0) / 2 / zoom
     return S.panel(img, (cx - hw, cy - hh, cx + hw, cy + hh), S.W, S.CAM_H, 1.2)
 
 WORDS, CH, BIG = [], [], []
@@ -288,4 +309,4 @@ if __name__ == "__main__":
     with Pool(int(os.environ.get("WORKERS", 4))) as p:
         for im in p.imap(frame, range(int(DUR * FPS)), chunksize=6): ff.stdin.write(im.tobytes())
     ff.stdin.close(); ff.wait()
-    master(vid, mix(voice), f"{WORK}/{NAME}.mp4"); os.remove(vid); print(f"{WORK}/{NAME}.mp4")
+    master(vid, mix(build_voice(with_bg=True)), f"{WORK}/{NAME}.mp4"); os.remove(vid); print(f"{WORK}/{NAME}.mp4")

@@ -1,6 +1,6 @@
 ---
 name: shazclipper
-description: Cut a streamer's VOD (a Google Drive link or an uploaded video) into vertical 9:16 clips in the @shazclipper house style - facecam on top, gameplay full below, a "▶ streamer | S @shazclipper" bar, plain Indonesian subtitles from the streamer's own voice, important moments in Titan One light green, all text in the TikTok/Reels/Shorts safe zone, no back sound (voice only), enhanced picture. Use whenever the user asks for clips, "klip", "clipper", "shazclipper", highlight cuts, or sends a stream/VOD link to clip, even without naming the style.
+description: Cut a streamer's VOD (a Google Drive link or an uploaded video) into vertical 9:16 clips in the @shazclipper house style - facecam on top, gameplay full below, a "▶ streamer | S @shazclipper" bar, plain Indonesian subtitles from the streamer's own voice (Whisper large-v3-turbo with word times, so the text matches what he says), important moments in Titan One light green, all text in the TikTok/Reels/Shorts safe zone, no back sound (voice only), enhanced picture. Use whenever the user asks for clips, "klip", "clipper", "shazclipper", highlight cuts, or sends a stream/VOD link to clip, even without naming the style.
 ---
 
 # @shazclipper clips
@@ -16,16 +16,18 @@ The user runs the clipper channel **@shazclipper** (Malaysian; talks Malay, read
 | Subtitles | **plain, ONE line**: Inter ExtraBold, white, black outline, same size, **no colour emphasis**, **Indonesian only** (the streamer's own words, from Whisper word times). A long phrase is split by time into balanced single lines (`one_line()`), never wrapped to two lines. (The old mint-word style stays available as `"subtitle_style": "moments"`.) |
 | Moments | Titan One (mint, 150,255,160) is only for the **cover, hook, reaction lines and end card**, never inside subtitles. Moment words (`MOMENT_WORDS` in `scripts/shaz_style.py`, extend with `moment_words`) still get a small camera punch and a hit sound, no colour |
 | Safe zone | **text only** must sit inside x 60–940, y 210–1470 (centred on x 500). Pictures may run under the app UI. Check with the `*_safe.jpg` stills |
-| Sound | **no back sound**: voice only (Demucs vocals + soft gate), plus small hits on moment words and whooshes on cuts. No music |
-| Picture | enhanced source frames: `hqdn3d` + CAS + light grade for 1080p VODs (fast); `nlmeans` + CAS for low-res screen recordings (slow, ~2 fps). `make_clip.py` picks by source height; override with `"enhance"` in the spec |
+| Sound | the streamer's **voice in front** (Demucs vocals + soft gate); the game's own sound stays **quietly underneath** (`back_sound`, default 0.18 ≈ −15 dB; 0 = voice only). Small hits on moment words, whooshes on cuts. No added music |
+| Picture | **AI on the facecam**: Real-ESRGAN realesr-general-x4v3 (ONNX in `models/`, BSD-3) upscales the facecam crop ×4 before it fills the panel (`ai_face`, default on; ~1.8 s/frame/core). Gameplay is 1080p already, so it gets the classic clean-up: enhanced source frames: `hqdn3d` + CAS + light grade for 1080p VODs (fast); `nlmeans` + CAS for low-res screen recordings (slow, ~2 fps). `make_clip.py` picks by source height; override with `"enhance"` in the spec |
 | Cover | **every clip opens with a ~1 s cover**: a frozen dramatic frame, the hook in big Titan One (first line white, second mint), a flash and a hit on frame 0, and a **voice saying the hook** (edge-tts, default `id-ID-ArdiNeural` at normal speed `+0%`: the user found +20% too fast). Its length follows the voice (≥ 1.0 s). It doubles as the TikTok thumbnail |
 | Shape | cover → hook (3 s, his own payoff line, `TONTON SAMPAI HABIS` pill low in the safe zone) → build-up → moment → optional slow replay (`REPLAY 0.5×`, red corners) → end card `MAU LAGI?` + `FOLLOW @shazclipper` |
 | Length | **61–75 s** (TikTok Creator Rewards needs > 60 s; also fine for Reels/Shorts). A 30–45 s Shorts cut is optional |
 | Loudness | −14 LUFS, true peak ≤ −1.5 dB |
 | Night scenes | dark gameplay (mean luma < 70) gets a gentle gamma lift automatically (`lift_dark`, off with `"auto_brighten": false`); still prefer bright cover frames |
-| Sexual content | **always blurred**: `make_clip.py` runs NudeNet (bundled model, offline) on every 1/3 s of the clip and the cover frame, and blurs the gameplay ±0.8 s around any exposed-nudity detection (`nsfw.json`). Add `"blur": [[a, b], …]` (VOD seconds) for anything it misses: kissing/sex scenes without nudity are not detected, so check suggestive scenes by eye. Never use a flagged frame as a cover. For a whole VOD, map it once: `scripts/nsfw_map.py <vod.mp4> ana/nsfw_map.json` (keyframes + NudeNet, ~27 ms/frame), and keep clips and covers away from flagged scenes |
+| Sexual content | scenes **may be used, but always blurred**: `make_clip.py` runs NudeNet (bundled model, offline) on every 1/3 s of the clip and the cover frame, and blurs the gameplay ±0.8 s around any exposed-nudity detection (`nsfw.json`). Add `"blur": [[a, b], …]` (VOD seconds) for anything it misses: kissing/sex scenes without nudity are not detected, so check suggestive scenes by eye. Never use a flagged frame as a cover. For a whole VOD, map it once: `scripts/nsfw_map.py <vod.mp4> ana/nsfw_map.json` (keyframes + NudeNet, ~27 ms/frame), and never use a flagged frame as a cover |
 
-Don'ts the user already rejected: two-line subtitles, green/mint words inside subtitles, Malay subtitle lines, bilingual lines, a second @shazclipper badge or a bottom watermark, background music or ambience, a gameplay band with a blurred bottom, Matcha Squishy (personal-use only).
+Titles/captions for posting: **Indonesian only** (one hook title + hashtags per clip: `#WindahBasudara #GTA6 #GTAVI #fyp #shazclipper` + 1 topic tag). Deliver as: video, then the title, then the hashtags.
+
+Don'ts the user already rejected: Malay titles, two-line subtitles, green/mint words inside subtitles, Malay subtitle lines, bilingual lines, a second @shazclipper badge or a bottom watermark, background music or ambience, a gameplay band with a blurred bottom, Matcha Squishy (personal-use only).
 
 ## Setup (once per session)
 
