@@ -187,7 +187,12 @@ def master(video, wav, out):
 
 if __name__ == "__main__":
     os.makedirs(WORK, exist_ok=True); prep_frames(); prep_voice()
-    voice = build_voice(); WORDS = prep_words(voice); CH = chunks(WORDS)
+    voice = build_voice(); WORDS = prep_words(voice)
+    fixes = {k.lower(): v for k, v in SPEC.get("fix_words", {}).items()}   # words Whisper mishears: {"menrobos": "menerobos"}
+    for x in WORDS:
+        core = re.sub(r"[^\w-]", "", x["w"]).lower()
+        if core in fixes: x["w"] = x["w"].lower().replace(core, fixes[core])
+    CH = chunks(WORDS)
     BIG = [x["t0"] for x in WORDS if S.is_moment(x["w"])]
     print(f"{NAME}: {DUR:.1f} s, {len(WORDS)} words, {len(CH)} subtitle phrases, moments at {[round(b, 1) for b in BIG]}")
     if "--stills" in sys.argv:

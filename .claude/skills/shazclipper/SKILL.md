@@ -34,7 +34,7 @@ uv pip install --quiet --python .venv/bin/python faster-whisper            # spe
 # Demucs (voice separation) in its own venv, CPU torch:
 uv venv --quiet --python 3.12 /tmp/demucs-venv
 uv pip install --quiet --python /tmp/demucs-venv/bin/python --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple torch torchaudio
-uv pip install --quiet --python /tmp/demucs-venv/bin/python demucs soundfile
+uv pip install --quiet --python /tmp/demucs-venv/bin/python demucs soundfile scipy
 export DEMUCS_PY=/tmp/demucs-venv/bin/python HF_HUB_DISABLE_XET=1
 ```
 
@@ -61,9 +61,9 @@ Network: the `lemo-opuscar` environment allows drive.google.com, drive.userconte
                  {"src": [5420, 5423], "speed": 0.5, "label": "replay"}],
     "hook": {"lines": ["NYUSUP KE", "KANTOR POLISI?!"], "cta": "TONTON SAMPAI HABIS"},
     "reactions": [{"t0": 40, "t1": 43, "text": "MUKANYA SANTAI BANGET…"}],
-    "moment_words": "polisi|menerobos", "end_card": true}
+    "moment_words": "polisi|menerobos", "fix_words": {"menrobos": "menerobos"}, "end_card": true}
    ```
-   `game.w` = crop width in source px (smaller = closer); `cx`/`cy` = numbers or keyframes `[[source_time, value], …]` following the character, who should sit ~45 % down the panel. Segment times are VOD seconds. Replays are voiceless (a whoosh instead).
+   `game.w` = crop width in source px (smaller = closer; ~980 for a 1080p VOD shows the character whole, 720 is a close-up); `cx`/`cy` = numbers or keyframes `[[source_time, value], …]` following the character, who should sit ~45 % down the panel. Segment times are VOD seconds. Replays are voiceless (a whoosh instead). `fix_words` corrects words Whisper mishears (check `words.json`).
 6. **Review stills, then render:**
    ```sh
    .venv/bin/python .claude/skills/shazclipper/scripts/make_clip.py films/<name>/clip01/spec.json --stills 1 10 30 60

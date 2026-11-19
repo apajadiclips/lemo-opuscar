@@ -114,7 +114,10 @@ def subtitle(base, t, first, second=None, y=SUB_Y, sz=62, sz2=40, times=None, t_
     if second: line_words(base, t, second.split(), y2 - sz * .2, sz2, GREY, t_on=t_on)
 
 def moment(base, s, y, sz, scale=1.0, col=MINT):
-    """A whole line in the moment style (hook, reaction, end card), centred in the safe column."""
+    """A whole line in the moment style (hook, reaction, end card), centred in the safe column.
+    Too wide for the safe column? It shrinks to fit (MAXW), so it never runs under the app UI."""
+    full = F(sz, MOMENT).getlength(s) * 1.06
+    if full > MAXW: sz = sz * MAXW / full
     L = word_img(s, sz, col, MOMENT, scale, .16); base.alpha_composite(L, (int(SAFE_CX - L.width / 2), int(y - L.height / 2)))
 
 def safe_overlay(im):
