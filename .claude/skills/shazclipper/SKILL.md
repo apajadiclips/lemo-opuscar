@@ -13,8 +13,8 @@ The user runs the clipper channel **@shazclipper** (Malaysian; talks Malay, read
 |---|---|
 | Frame | 1080×1920, 24 fps. Facecam 0–760, divider 760–836, gameplay 836–1920 full to the bottom (no blurred bands, no letterbox) |
 | Divider | black bar, light-green top line; left `▶ <Streamer name>` (red ▶), right `S @shazclipper` (mint circle "S"). **The channel appears once, only here**: no bottom watermark, no second badge |
-| Subtitles | **plain**: Inter ExtraBold, white, black outline, **Indonesian only** (the streamer's own words, from Whisper word times), phrase by phrase |
-| Moments | only the important words/lines use **Titan One, light green (mint, 150,255,160)**, a little bigger, popping in on the word (rob/steal/kill/police/... see `MOMENT_WORDS` in `scripts/shaz_style.py`, extend per clip with `moment_words`). Hook, reaction lines and the end card are moments too |
+| Subtitles | **plain, ONE line**: Inter ExtraBold, white, black outline, same size, **no colour emphasis**, **Indonesian only** (the streamer's own words, from Whisper word times). A long phrase is split by time into balanced single lines (`one_line()`), never wrapped to two lines. (The old mint-word style stays available as `"subtitle_style": "moments"`.) |
+| Moments | Titan One (mint, 150,255,160) is only for the **cover, hook, reaction lines and end card**, never inside subtitles. Moment words (`MOMENT_WORDS` in `scripts/shaz_style.py`, extend with `moment_words`) still get a small camera punch and a hit sound, no colour |
 | Safe zone | **text only** must sit inside x 60–940, y 210–1470 (centred on x 500). Pictures may run under the app UI. Check with the `*_safe.jpg` stills |
 | Sound | **no back sound**: voice only (Demucs vocals + soft gate), plus small hits on moment words and whooshes on cuts. No music |
 | Picture | enhanced source frames: `hqdn3d` + CAS + light grade for 1080p VODs (fast); `nlmeans` + CAS for low-res screen recordings (slow, ~2 fps). `make_clip.py` picks by source height; override with `"enhance"` in the spec |
@@ -23,7 +23,7 @@ The user runs the clipper channel **@shazclipper** (Malaysian; talks Malay, read
 | Length | **61–75 s** (TikTok Creator Rewards needs > 60 s; also fine for Reels/Shorts). A 30–45 s Shorts cut is optional |
 | Loudness | −14 LUFS, true peak ≤ −1.5 dB |
 
-Don'ts the user already rejected: Malay subtitle lines, bilingual lines, a second @shazclipper badge or a bottom watermark, background music or ambience, a gameplay band with a blurred bottom, Matcha Squishy (personal-use only).
+Don'ts the user already rejected: two-line subtitles, green/mint words inside subtitles, Malay subtitle lines, bilingual lines, a second @shazclipper badge or a bottom watermark, background music or ambience, a gameplay band with a blurred bottom, Matcha Squishy (personal-use only).
 
 ## Setup (once per session)
 

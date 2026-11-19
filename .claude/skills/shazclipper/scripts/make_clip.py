@@ -194,7 +194,8 @@ def frame(n):
     elif not (in_hook and not COVER):
         for c in CH:
             if c[0]["c0"] <= t < c[0]["c1"]:
-                S.subtitle(base, t, " ".join(x["w"] for x in c), None, times=[x["t0"] for x in c], t_on=c[0]["t0"])
+                if SPEC.get("subtitle_style", "plain") == "plain": S.subtitle_plain(base, " ".join(x["w"] for x in c))
+                else: S.subtitle(base, t, " ".join(x["w"] for x in c), None, times=[x["t0"] for x in c], t_on=c[0]["t0"])   # "moments": mint words
     im = base.convert("RGB")
     for g2 in (SEGS if COVER else SEGS[1:]):
         if g2["o0"] <= t < g2["o0"] + .08: im = Image.blend(im, Image.new("RGB", (S.W, S.H), S.WHT), .3 * (1 - (t - g2["o0"]) / .08))
@@ -231,6 +232,15 @@ if __name__ == "__main__":
         core = re.sub(r"[^\w-]", "", x["w"]).lower()
         if core in fixes: x["w"] = x["w"].lower().replace(core, fixes[core])
     CH = chunks(WORDS)
+    if SPEC.get("subtitle_style", "plain") == "plain":     # one line each: split long phrases by time, never wrap
+        flat = []
+        for c in CH:
+            parts = S.one_line(c)
+            for j, p in enumerate(parts):
+                p[0]["c0"] = p[0]["t0"]
+                p[0]["c1"] = parts[j + 1][0]["t0"] if j + 1 < len(parts) else c[0]["c1"]
+                flat.append(p)
+        CH = flat
     BIG = [x["t0"] for x in WORDS if S.is_moment(x["w"])]
     print(f"{NAME}: {DUR:.1f} s, {len(WORDS)} words, {len(CH)} subtitle phrases, moments at {[round(b, 1) for b in BIG]}")
     if "--stills" in sys.argv:

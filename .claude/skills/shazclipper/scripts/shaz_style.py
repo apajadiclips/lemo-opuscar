@@ -108,6 +108,26 @@ def line_words(base, t, words, y, sz, col, big=1.3, t_on=None, times=None):
             x += ws[i] + sp
     return y + len(lines) * sz * 1.3
 
+def one_line(words, sz=62):
+    """Split a phrase into consecutive pieces that each fit ONE line (MAXW), keeping word order and times."""
+    sp = F(sz).getlength(" "); ws = [F(sz).getlength(clean(x["w"])) for x in words]
+    total = sum(ws) + sp * (len(ws) - 1)
+    k = max(1, math.ceil(total / MAXW))
+    while True:                                    # balanced pieces: about total/k wide each, none wider than MAXW
+        target = total / k; out, cur, cw = [], [], 0.0
+        for x, w in zip(words, ws):
+            add = w + (sp if cur else 0)
+            if cur and (cw + add > MAXW or (cw + add / 2 > target and len(out) < k - 1)): out.append(cur); cur, cw = [x], w
+            else: cur.append(x); cw += add
+        if cur: out.append(cur)
+        if len(out) <= k or k > len(words): return out
+        k += 1
+
+def subtitle_plain(base, text, y=SUB_Y, sz=62):
+    """The default @shazclipper subtitle: one line, plain white Inter ExtraBold, black outline, no colour emphasis."""
+    L = word_img(" ".join(clean(w) for w in text.split()), sz, WHT)
+    base.alpha_composite(L, (int(SAFE_CX - L.width / 2), int(y - L.height / 2)))
+
 def subtitle(base, t, first, second=None, y=SUB_Y, sz=62, sz2=40, times=None, t_on=None):
     """Plain two-language subtitle: first language white (sz), second smaller and grey under it."""
     y2 = line_words(base, t, first.split(), y, sz, WHT, times=times, t_on=t_on)
