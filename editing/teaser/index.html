@@ -1,0 +1,278 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="/core/fonts/fonts.css">
+<style>html,body{margin:0;background:#101015;overflow:hidden}canvas{display:block}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+// Teaser "5 Gaya Edit Trending": 30 s, 1080x1920, 120 BPM (beat 0.5 s). Every frame is a pure function of t.
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const W = cv.width = innerWidth, H = cv.height = innerHeight;
+const C = { ink: '#101015', or: '#FF5A1F', lime: '#C6FF3D', cream: '#F4EFE6', cob: '#2B4BFF', pink: '#FF3D9A', sun: '#FFB020' };
+const DUR = 30, BEAT = 0.5;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+const lerp = (a, b, k) => a + (b - a) * k;
+const eo = k => 1 - Math.pow(1 - k, 3), ei = k => k * k * k;
+const eio = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+const back = k => { const s = 1.9; return 1 + (s + 1) * Math.pow(k - 1, 3) + s * Math.pow(k - 1, 2); };
+const hash = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+let TX = [];   // texts drawn this frame, for readcheck
+
+// ---------- events (sound and cue map; the mixer reads these) ----------
+const EV = [];
+EV.push({ t: 0, type: 'impact' }, { t: 0.5, type: 'punch' }, { t: 1.0, type: 'pullout' });
+for (let i = 0; i <= 9; i++) EV.push({ t: 5 + i * BEAT, type: 'bounce' });
+for (let i = 1; i <= 6; i++) EV.push({ t: 5 + i * BEAT, type: 'cut' });
+EV.push({ t: 10, type: 'roll' }, { t: 11.5, type: 'slow_in' }, { t: 13.0, type: 'slow_out' });
+EV.push({ t: 15.85, type: 'whoosh' }, { t: 17.85, type: 'whoosh' });
+EV.push({ t: 20, type: 'bounce' }, { t: 20.5, type: 'bounce' }, { t: 21.0, type: 'sun' }, { t: 22.5, type: 'vinyl' }, { t: 24.3, type: 'stop' });
+EV.push({ t: 25.0, type: 'boom' });
+[25.0, 25.5, 26.0, 26.5, 27.0].forEach(t => EV.push({ t, type: 'word' }));
+EV.push({ t: 29.0, type: 'hit' });
+
+// ---------- drawing helpers ----------
+function font(sz, fam) { g.font = `${fam === 'f' ? 500 : 400} ${sz}px ${fam === 'f' ? 'Fredoka' : "'Lilita One'"}`; }
+function text(s, x, y, sz, col, fam = 'l', align = 'center', id = null) {
+  font(sz, fam); g.textAlign = align; g.textBaseline = 'alphabetic'; g.fillStyle = col; g.fillText(s, x, y);
+  if (id) {
+    const w = g.measureText(s).width, x0 = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
+    const m = g.getTransform();
+    const p0 = m.transformPoint(new DOMPoint(x0, y - sz * .78)), p1 = m.transformPoint(new DOMPoint(x0 + w, y + sz * .22));
+    TX.push({ id, text: s, x0: Math.round(Math.min(p0.x, p1.x)), y0: Math.round(Math.min(p0.y, p1.y)), x1: Math.round(Math.max(p0.x, p1.x)), y1: Math.round(Math.max(p0.y, p1.y)) });
+  }
+}
+function rr(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function ball(x, y, r, rot = 0, sq = 1, col = C.or) {
+  g.save(); g.translate(x, y); g.scale(1 / Math.sqrt(sq), sq); g.rotate(rot);
+  g.fillStyle = col; g.beginPath(); g.arc(0, 0, r, 0, 7); g.fill();
+  g.strokeStyle = 'rgba(16,16,21,.85)'; g.lineWidth = r * .06;           // seam lines: make rotation readable
+  g.beginPath(); g.arc(0, 0, r * .97, 0, 7); g.stroke();
+  g.beginPath(); g.moveTo(-r, 0); g.quadraticCurveTo(0, r * .35, r, 0); g.stroke();
+  g.beginPath(); g.moveTo(0, -r); g.quadraticCurveTo(r * .35, 0, 0, r); g.stroke();
+  g.fillStyle = 'rgba(255,255,255,.28)'; g.beginPath(); g.ellipse(-r * .38, -r * .42, r * .26, r * .16, -.6, 0, 7); g.fill();
+  g.restore();
+}
+function shadow(x, y, r, a = .35) { g.fillStyle = `rgba(0,0,0,${a})`; g.beginPath(); g.ellipse(x, y, r, r * .22, 0, 0, 7); g.fill(); }
+function bg(col) { g.fillStyle = col; g.fillRect(0, 0, W, H); }
+function vignette(a = .45) {
+  const v = g.createRadialGradient(W / 2, H / 2, H * .25, W / 2, H / 2, H * .75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, `rgba(0,0,0,${a})`); g.fillStyle = v; g.fillRect(0, 0, W, H);
+}
+
+// Section label: number block + style name + one line in Malay, in the lower third, away from the subject.
+function label(t, t0, t1, n, name, desc) {
+  if (t < t0 || t >= t1) return;
+  const k = eo(seg(t, t0, t0 + .25)), y = H * .755 + (1 - k) * 60;
+  g.save(); g.globalAlpha = k;
+  g.fillStyle = 'rgba(16,16,21,.88)'; rr(54, y, W - 108, 250, 34); g.fill();
+  g.fillStyle = C.lime; rr(86, y + 34, 128, 104, 20); g.fill();
+  text(n, 150, y + 117, 82, C.ink, 'l', 'center', 'num' + n);
+  text(name, 240, y + 117, 84, C.cream, 'l', 'left', 'name' + n);
+  text(desc, 92, y + 208, 50, 'rgba(244,239,230,.88)', 'f', 'left', 'desc' + n);
+  g.restore();
+}
+function flash(t, times, len = .09, col = '255,255,255') {
+  for (const c of times) if (t >= c && t < c + len) { g.fillStyle = `rgba(${col},${.55 * (1 - (t - c) / len)})`; g.fillRect(0, 0, W, H); }
+}
+
+// ---------- 1. FIRST-FRAME HOOK (0-5) ----------
+function s1(t) {
+  bg(C.ink);
+  const pull = eio(seg(t, 1.0, 2.2));
+  let z = t < .5 ? 3.0 : 3.45; z = lerp(z, 1, pull);
+  const shake = Math.exp(-((t % .5) / .12)) * (t < 1 ? 18 : 0);
+  const sx = Math.sin(t * 97) * shake, sy = Math.cos(t * 83) * shake;
+  const cx = W / 2, cy = lerp(H * .55, H * .42, pull), r = 190;
+  // plinth appears as the camera pulls out
+  g.save(); g.translate(cx + sx, cy + sy); g.scale(z, z);
+  g.fillStyle = '#1d1d26'; rr(-260, r, 520, 900, 30); g.fill();
+  g.fillStyle = C.lime; g.fillRect(-260, r, 520, 14);
+  shadow(0, r + 4, r * .8, .5);
+  const hop = t > 2.5 ? Math.abs(Math.sin((t - 2.5) * Math.PI / BEAT)) * 60 * seg(t, 2.5, 3) : 0;
+  ball(0, -hop, r, t * .4);
+  g.restore();
+  // rings on the two punches
+  for (const c of [0, .5]) if (t >= c && t < c + .45) {
+    const k = (t - c) / .45; g.strokeStyle = `rgba(198,255,61,${1 - k})`; g.lineWidth = 16 * (1 - k);
+    g.beginPath(); g.arc(cx, cy, 560 + k * 500, 0, 7); g.stroke();
+  }
+  if (t < 2.5) {   // on screen from frame 0: no fade-in
+    const p = t < .5 ? 1 : 1 + .06 * Math.exp(-(t - .5) / .1);
+    g.save(); g.translate(W / 2, 300); g.scale(p, p);
+    text('JANGAN SCROLL.', 0, 0, 116, C.cream, 'l', 'center', 'hook');
+    g.restore();
+  }
+  label(t, 2.0, 5.0, '01', 'FIRST-FRAME HOOK', 'Saat 0 mesti tahan jari.');
+}
+
+// ---------- 2. BEAT-SYNC (5-10) ----------
+function s2(t) {
+  const lt = t - 5, idx = Math.min(Math.floor(lt / BEAT), 6), f = idx >= 6 ? 0 : idx % 4;
+  const ph = (lt / BEAT) % 1, h = 1 - Math.pow(2 * ph - 1, 2);            // lands on every beat
+  const sq = ph < .08 ? 1 - .25 * (1 - ph / .08) : ph > .94 ? .9 : 1;       // squash at the landing
+  if (f === 0) {          // wide
+    bg(C.cob); g.fillStyle = '#1f39c4'; g.fillRect(0, H * .62, W, H);
+    shadow(W / 2, H * .62, 150 * (1 - .4 * h));
+    ball(W / 2, H * .62 - 150 * sq - h * 520, 150, lt * 3, sq);
+  } else if (f === 1) {   // low angle
+    bg(C.pink); g.fillStyle = '#c8237a'; g.beginPath(); g.moveTo(0, H * .66); g.lineTo(W, H * .58); g.lineTo(W, H); g.lineTo(0, H); g.fill();
+    shadow(W * .55, H * .62, 230 * (1 - .3 * h));
+    ball(W * .55, H * .62 - 240 * sq - h * 380, 240, lt * 3, sq);
+  } else if (f === 2) {   // top view: the bounce reads as scale
+    bg(C.lime); g.strokeStyle = 'rgba(16,16,21,.18)'; g.lineWidth = 4;
+    for (let x = 0; x < W; x += 120) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+    for (let y = 0; y < H; y += 120) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+    g.fillStyle = 'rgba(0,0,0,.25)'; g.beginPath(); g.arc(W / 2 + 30 * h, H * .42 + 40 * h, 200, 0, 7); g.fill();
+    ball(W / 2, H * .42, 200 * (1 + .45 * h), lt * 3);
+  } else {                // close
+    bg(C.ink); g.fillStyle = '#22222c'; g.fillRect(0, H * .7, W, H);
+    ball(W * .5, H * .7 - 420 * sq - h * 140, 420, lt * 3, sq);
+  }
+  flash(t, [5.5, 6, 6.5, 7, 7.5, 8]);
+  label(t, 5.6, 10.0, '02', 'BEAT-SYNC', 'Setiap cut jatuh atas beat.');
+}
+
+// ---------- 3. SPEED RAMP (10-15) ----------
+function speed(t) {   // playback speed, 1 = real time
+  if (t < 11.3) return 3;
+  if (t < 11.6) return lerp(3, .12, eio(seg(t, 11.3, 11.6)));
+  if (t < 12.9) return .12;
+  if (t < 13.2) return lerp(.12, 3, eio(seg(t, 12.9, 13.2)));
+  return 3;
+}
+function ramped(t) { let s = 0; const dt = 1 / 480; for (let u = 10; u < t; u += dt) s += speed(u) * dt; return s; }
+function s3(t) {
+  const sp = speed(t), slow = 1 - clamp((sp - .12) / 2.88, 0, 1), X = ramped(t) * 900;  // world px
+  bg(slow > .5 ? '#15151d' : C.ink);
+  const gy = H * .6;
+  g.fillStyle = '#1c1c26'; g.fillRect(0, gy, W, H - gy);
+  // lane lines and posts scroll with the world; streak length follows the speed
+  for (let i = -2; i < 10; i++) {
+    const px = ((i * 360 - X) % 3600 + 3600) % 3600 - 300;
+    const streak = sp * 40;
+    g.fillStyle = i % 2 ? C.lime : C.cream;
+    g.globalAlpha = .9; g.fillRect(px, gy + 120, 160 + streak, 16); g.globalAlpha = 1;
+    g.fillStyle = '#2b2b38'; g.fillRect(px + 40, gy - 520, 26 + streak * .5, 520);
+  }
+  // dust hangs in the air during slow motion
+  for (let i = 0; i < 60; i++) {
+    const x = ((hash(i) * 2400 - X * (.3 + hash(i + 9) * .6)) % 1200 + 1200) % 1200 - 60, y = H * (.15 + hash(i + 3) * .5);
+    g.fillStyle = `rgba(244,239,230,${.12 + .4 * slow})`; g.fillRect(x, y, 6 + sp * 18, 6);
+  }
+  const bx = W * .5, by = gy - 210 - Math.abs(Math.sin(X / 700)) * 60;
+  for (let k = 6; k >= 1; k--) {      // speed trail
+    g.globalAlpha = .12 * (sp / 3); ball(bx - k * sp * 22, by, 200, X / 200, 1); }
+  g.globalAlpha = 1; shadow(bx, gy, 170); ball(bx, by, 200, X / 200);
+  if (slow > 0) {                     // slow-mo grade: cool overlay + letterbox bars
+    g.fillStyle = `rgba(43,75,255,${.16 * slow})`; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, 140 * slow); g.fillRect(0, H - 140 * slow, W, 140 * slow);
+  }
+  // speed readout
+  g.save(); g.globalAlpha = .9;
+  text(sp >= 2.9 ? '3×' : sp <= .13 ? '0.1×' : sp.toFixed(1) + '×', W - 80, 260, 96, C.lime, 'l', 'right', null);
+  g.restore();
+  label(t, 10.4, 15.0, '03', 'SPEED RAMP', 'Laju, perlahan, laju semula.');
+}
+
+// ---------- 4. WHIP-PAN (15-20) ----------
+function camX(t) { return W * (eio(seg(t, 15.85, 16.15)) + eio(seg(t, 17.85, 18.15))); }
+function rooms(cx, t) {
+  const rm = [
+    { bg: C.cream, wall: '#e6ddcc', acc: C.cob },
+    { bg: C.cob, wall: '#2440dd', acc: C.lime },
+    { bg: C.pink, wall: '#ee2f8a', acc: C.cream },
+  ];
+  rm.forEach((r, i) => {
+    const ox = i * W - cx; if (ox > W || ox < -W) return;
+    g.fillStyle = r.bg; g.fillRect(ox, 0, W, H);
+    g.fillStyle = r.wall; g.fillRect(ox, H * .64, W, H);
+    g.fillStyle = r.acc;
+    if (i === 0) { rr(ox + 120, 300, 340, 440, 20); g.fill(); g.fillStyle = r.bg; g.fillRect(ox + 280, 300, 20, 440); g.fillRect(ox + 120, 510, 340, 20);
+      g.fillStyle = '#3b2a20'; g.fillRect(ox + 200, H * .64 - 260, 680, 40); g.fillRect(ox + 240, H * .64 - 220, 30, 220); g.fillRect(ox + 810, H * .64 - 220, 30, 220);
+      ball(ox + 540, H * .64 - 260 - 170, 170, t); }
+    if (i === 1) { for (let s = 0; s < 3; s++) g.fillRect(ox + 100, 420 + s * 300, 880, 26);
+      for (let b = 0; b < 5; b++) { g.fillStyle = [C.cream, C.pink, C.lime][b % 3]; g.fillRect(ox + 140 + b * 70, 300 + 300, 50, 120 + (b % 2) * 30); }
+      ball(ox + 760, 720 - 150, 150, t); }
+    if (i === 2) { g.strokeStyle = r.acc; g.lineWidth = 24; g.beginPath(); g.ellipse(ox + 540, 560, 230, 70, 0, 0, 7); g.stroke();
+      g.fillStyle = r.acc; g.fillRect(ox + 300, 420, 480, 30);
+      const hb = Math.abs(Math.sin((t - 18.15) * Math.PI / BEAT));
+      shadow(ox + 540, H * .64, 150); ball(ox + 540, H * .64 - 160 - hb * 300 * seg(t, 18.15, 18.6), 160, t); }
+  });
+}
+function s4(t) {
+  // motion blur: average 8 sub-frames across a 1/48 s shutter
+  const v = Math.abs(camX(t + .005) - camX(t - .005));
+  if (v < 1) { rooms(camX(t), t); }
+  else for (let k = 0; k < 8; k++) { g.globalAlpha = 1 / (k + 1); rooms(camX(t - .021 * k / 7), t); }
+  g.globalAlpha = 1;
+  label(t, 15.3, 20.0, '04', 'WHIP-PAN', 'Libas kamera, tukar babak.');
+}
+
+// ---------- 5. MATCH CUT (20-25) ----------
+function s5(t) {
+  const cx = W / 2, cy = H * .4, r = 230 * (1 + .04 * seg(t, 20, 24.3));
+  const shrink = eio(seg(t, 24.3, 25.0)), rr2 = lerp(r, 18, shrink);
+  if (t < 21) {
+    bg(C.ink); g.fillStyle = '#20202a'; g.fillRect(0, cy + r, W, H);
+    shadow(cx, cy + r, r * .8); ball(cx, cy - Math.abs(Math.sin((t - 20) * Math.PI / BEAT)) * 0, r, t * .5);
+  } else if (t < 22.5) {
+    const sk = g.createLinearGradient(0, 0, 0, H * .6); sk.addColorStop(0, '#3a1a5c'); sk.addColorStop(1, C.pink);
+    g.fillStyle = sk; g.fillRect(0, 0, W, H);
+    g.fillStyle = C.sun; g.beginPath(); g.arc(cx, cy, r, 0, 7); g.fill();
+    g.fillStyle = '#1a2a6a'; g.fillRect(0, cy + r * .55, W, H);
+    for (let i = 0; i < 9; i++) { g.fillStyle = `rgba(255,176,32,${.7 - i * .07})`; const w = (r * 1.6) * (1 - i * .08); g.fillRect(cx - w / 2, cy + r * .7 + i * 46, w, 14); }
+  } else {
+    bg('#ece4d6');
+    const spin = t < 24.3 ? (t - 22.5) * 3.5 : (1.8 * 3.5) + (1 - Math.pow(1 - seg(t, 24.3, 24.8), 2)) * .5;
+    g.save(); g.translate(cx, cy); g.rotate(spin);
+    g.fillStyle = '#121216'; g.beginPath(); g.arc(0, 0, r * 2.3 * (1 - shrink), 0, 7); g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.08)'; g.lineWidth = 3;
+    for (let k = 1.1; k < 2.25; k += .07) { g.beginPath(); g.arc(0, 0, r * k * (1 - shrink), 0, 7); g.stroke(); }
+    g.fillStyle = C.or; g.beginPath(); g.arc(0, 0, rr2, 0, 7); g.fill();
+    if (shrink < .5) { g.fillStyle = C.ink; g.fillRect(-rr2 * .6, -6, rr2 * 1.2, 12); g.beginPath(); g.arc(0, 0, 14, 0, 7); g.fillStyle = '#ece4d6'; g.fill(); }
+    g.restore();
+  }
+  flash(t, [21, 22.5], .08);
+  label(t, 20.4, 24.3, '05', 'MATCH CUT', 'Bentuk sama, dunia lain.');
+}
+
+// ---------- 6. TITLE (25-30) ----------
+function s6(t) {
+  bg(C.ink);
+  if (t < 25.6) {   // the dot bursts into the title
+    const k = seg(t, 25, 25.6); g.strokeStyle = `rgba(255,90,31,${1 - k})`; g.lineWidth = 30 * (1 - k);
+    g.beginPath(); g.arc(W / 2, H * .4, 18 + k * 900, 0, 7); g.stroke();
+  }
+  const push = 1 + .05 * seg(t, 25, 30);
+  g.save(); g.translate(W / 2, H * .46); g.scale(push, push);
+  const words = [['5', -560, 300, C.or], ['GAYA', -300, 220, C.cream], ['EDIT', -80, 220, C.cream], ['TRENDING', 130, 170, C.lime]];
+  words.forEach(([w, y, sz, col], i) => {
+    const t0 = 25 + i * .5; if (t < t0) return;
+    const k = seg(t, t0, t0 + .22), s = lerp(1.8, 1, back(k));
+    g.save(); g.translate(0, y); g.scale(s, s); g.globalAlpha = clamp(k * 3, 0, 1);
+    text(w, 0, 0, sz, col, 'l', 'center', null); g.restore();
+  });
+  if (t >= 27) {
+    const k = back(seg(t, 27, 27.25));
+    g.save(); g.translate(0, 360); g.scale(k, k);
+    g.fillStyle = C.or; rr(-230, -120, 460, 150, 26); g.fill();
+    text('2026', 0, 0, 130, C.ink, 'l', 'center', null); g.restore();
+  }
+  if (t >= 29) { const k = eo(seg(t, 29, 29.3)); g.fillStyle = C.lime; g.fillRect(-380 * k, 470, 760 * k, 16); }
+  g.restore();
+  // readcheck: the title is one piece of text from its first frame
+  if (t >= 25) TX.push({ id: 'title', text: '5 GAYA EDIT TRENDING', x0: 120, y0: Math.round(H * .46 - 820), x1: W - 120, y1: Math.round(H * .46 + 200) });
+  if (t >= 27) TX.push({ id: 'year', text: '2026', x0: W / 2 - 240, y0: Math.round(H * .46 + 230), x1: W / 2 + 240, y1: Math.round(H * .46 + 400) });
+  flash(t, [29], .12, '198,255,61');
+}
+
+function render(t) {
+  TX = []; g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+  t = clamp(t, 0, DUR - 1e-6);
+  if (t < 5) s1(t); else if (t < 10) s2(t); else if (t < 15) s3(t); else if (t < 20) s4(t); else if (t < 25) s5(t); else s6(t);
+  vignette(.35);
+}
+window.DUR = DUR; window.EV = EV; window.render = render;
+window.TEXTS = t => { render(t); return TX; };
+Promise.all([document.fonts.load("400 80px 'Lilita One'"), document.fonts.load('500 50px Fredoka')]).then(() => { render(0); window.READY = true; });
+</script></body></html>
