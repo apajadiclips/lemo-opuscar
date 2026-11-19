@@ -36,7 +36,7 @@ def cover_tts():
     if not os.path.exists(wav_):
         say = COVER.get("say") or " ".join(COVER.get("lines") or SPEC.get("hook", {}).get("lines", []))
         env = dict(os.environ, SSL_CERT_FILE=os.environ.get("SSL_CERT_FILE", "/root/.ccr/ca-bundle.crt"))
-        cmd = [os.path.join(LIB, ".venv", "bin", "edge-tts"), "--voice", COVER.get("voice", "id-ID-ArdiNeural"), f"--rate={COVER.get('rate', '+20%')}", "--text", say, "--write-media", mp3]
+        cmd = [os.path.join(LIB, ".venv", "bin", "edge-tts"), "--voice", COVER.get("voice", "id-ID-ArdiNeural"), f"--rate={COVER.get('rate', '+0%')}", "--text", say, "--write-media", mp3]
         if os.environ.get("HTTPS_PROXY"): cmd[1:1] = ["--proxy", os.environ["HTTPS_PROXY"]]   # aiohttp ignores the proxy env by itself
         run(cmd, env=env)
         trim = "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse"

@@ -18,7 +18,7 @@ The user runs the clipper channel **@shazclipper** (Malaysian; talks Malay, read
 | Safe zone | **text only** must sit inside x 60–940, y 210–1470 (centred on x 500). Pictures may run under the app UI. Check with the `*_safe.jpg` stills |
 | Sound | **no back sound**: voice only (Demucs vocals + soft gate), plus small hits on moment words and whooshes on cuts. No music |
 | Picture | enhanced source frames: `hqdn3d` + CAS + light grade for 1080p VODs (fast); `nlmeans` + CAS for low-res screen recordings (slow, ~2 fps). `make_clip.py` picks by source height; override with `"enhance"` in the spec |
-| Cover | **every clip opens with a ~1 s cover**: a frozen dramatic frame, the hook in big Titan One (first line white, second mint), a flash and a hit on frame 0, and a **voice saying the hook** (edge-tts, default `id-ID-ArdiNeural`, `+20%`). Its length follows the voice (≥ 1.0 s). It doubles as the TikTok thumbnail |
+| Cover | **every clip opens with a ~1 s cover**: a frozen dramatic frame, the hook in big Titan One (first line white, second mint), a flash and a hit on frame 0, and a **voice saying the hook** (edge-tts, default `id-ID-ArdiNeural` at normal speed `+0%`: the user found +20% too fast). Its length follows the voice (≥ 1.0 s). It doubles as the TikTok thumbnail |
 | Shape | cover → hook (3 s, his own payoff line, `TONTON SAMPAI HABIS` pill low in the safe zone) → build-up → moment → optional slow replay (`REPLAY 0.5×`, red corners) → end card `MAU LAGI?` + `FOLLOW @shazclipper` |
 | Length | **61–75 s** (TikTok Creator Rewards needs > 60 s; also fine for Reels/Shorts). A 30–45 s Shorts cut is optional |
 | Loudness | −14 LUFS, true peak ≤ −1.5 dB |
@@ -60,7 +60,7 @@ Network: the `lemo-opuscar` environment allows drive.google.com, drive.userconte
     "segments": [{"src": [5393, 5396], "speed": 1, "label": "hook"},
                  {"src": [5376, 5440], "speed": 1, "label": "clip"},
                  {"src": [5420, 5423], "speed": 0.5, "label": "replay"}],
-    "cover": {"lines": ["NYUSUP KE", "KANTOR POLISI?!"], "say": "Nyusup ke kantor polisi?!", "frame": 5424, "voice": "id-ID-ArdiNeural", "rate": "+20%"},
+    "cover": {"lines": ["NYUSUP KE", "KANTOR POLISI?!"], "say": "Nyusup ke kantor polisi?!", "frame": 5424, "voice": "id-ID-ArdiNeural", "rate": "+0%"},
     "hook": {"lines": ["NYUSUP KE", "KANTOR POLISI?!"], "cta": "TONTON SAMPAI HABIS"},
     "reactions": [{"t0": 40, "t1": 43, "text": "MUKANYA SANTAI BANGET…"}],
     "moment_words": "polisi|menerobos", "fix_words": {"menrobos": "menerobos"}, "end_card": true}
