@@ -25,7 +25,7 @@ NAME = SPEC["name"]; S.STREAMER = SPEC.get("streamer", S.STREAMER)
 if SPEC.get("moment_words"): S.MOMENT_WORDS = S.MOMENT_WORDS + "|" + SPEC["moment_words"]
 SEGS = SPEC["segments"]                       # [{src: [a, b], speed: 1, label: hook|clip|replay}]
 for k, g in enumerate(SEGS): g["k"] = k; g["dur"] = (g["src"][1] - g["src"][0]) / g.get("speed", 1.0)
-END = 2.6 if SPEC.get("end_card", True) else 0
+END = 3.4 if SPEC.get("end_card", True) else 0       # the "full video on the streamer's channel" card
 def run(cmd, **kw): subprocess.run(cmd, check=True, **kw)
 
 # ---------- 0. cover: a 1-s+ title frame with a voice saying the hook (edge-tts) ----------
@@ -239,11 +239,28 @@ def frame(n):
             d2.text((S.SAFE_CX, y + 30), s, font=S.F(32), fill=S.WHT, anchor="mm")
     for r in SPEC.get("reactions", []):                    # [{t0, t1, text}] in clip time: a moment line over the facecam
         if r["t0"] <= t < r["t1"]: S.moment(base, r["text"], S.DIV_Y - 80, r.get("size", 60))
-    if end:
-        S.moment(base, SPEC.get("end_text", "MAU LAGI?"), S.GAME_Y + 250, 110, S.back(S.seg(t, DUR - END + .2, DUR - END + .5)))
-        kk = S.back(S.seg(t, DUR - END + .5, DUR - END + .8)); w2 = int(680 * kk); d2 = ImageDraw.Draw(base)
-        d2.rounded_rectangle((S.SAFE_CX - w2 / 2, S.GAME_Y + 390, S.SAFE_CX + w2 / 2, S.GAME_Y + 496), 53, fill=S.MINT + (255,))
-        if kk > .7: d2.text((S.SAFE_CX, S.GAME_Y + 443), "FOLLOW " + S.CHANNEL, font=S.F(52), fill=S.BLK, anchor="mm")
+    if end:                                              # end card: send viewers to the streamer's full video
+        te = t - (DUR - END)
+        S.moment(base, SPEC.get("end_line1", "NONTON FULL VIDEO"), S.GAME_Y + 170, 84, S.back(S.seg(te, .1, .35)), S.WHT)
+        S.moment(base, SPEC.get("end_line2", "DI CHANNEL"), S.GAME_Y + 268, 96, S.back(S.seg(te, .2, .45)))
+        k = S.back(S.seg(te, .45, .75))
+        if k > 0:                                        # pill: streamer face, name, red "TONTON SEKARANG"
+            pw, ph = int(860 * k), 120; x0, y0 = int(S.SAFE_CX - pw / 2), S.GAME_Y + 360
+            pill = Image.new("RGBA", (max(pw, 2), ph), (0, 0, 0, 0)); dp = ImageDraw.Draw(pill)
+            dp.rounded_rectangle((0, 0, pw - 1, ph - 1), 60, fill=(12, 12, 14, 240), outline=(255, 255, 255, 60), width=2)
+            if k > .8:
+                face = cam.crop((540 - 230, 330 - 230, 540 + 230, 330 + 230)).resize((96, 96), Image.LANCZOS)
+                m = Image.new("L", (96, 96), 0); ImageDraw.Draw(m).ellipse((0, 0, 95, 95), fill=255)
+                pill.paste(face, (12, 12), m); dp.ellipse((12, 12, 107, 107), outline=(255, 255, 255, 220), width=3)
+                dp.text((124, ph / 2), S.STREAMER.upper(), font=S.F(32), fill=S.WHT + (255,), anchor="lm")
+                bx1 = pw - 16; bw = int(dp.textlength("TONTON SEKARANG", font=S.F(22))) + 70
+                dp.rounded_rectangle((bx1 - bw, 28, bx1, ph - 28), 16, fill=(220, 30, 30, 255))
+                dp.text((bx1 - bw + 16, ph / 2), "TONTON SEKARANG", font=S.F(22), fill=S.WHT + (255,), anchor="lm")
+                dp.polygon([(bx1 - 36, ph / 2 - 11), (bx1 - 36, ph / 2 + 11), (bx1 - 17, ph / 2)], fill=S.WHT + (255,))
+            base.alpha_composite(pill, (x0, y0))
+        if te > .9:
+            handle = SPEC.get("streamer_handle", "@" + S.STREAMER.replace(" ", ""))
+            S.subtitle_plain(base, f"Full video di {handle}", y=S.GAME_Y + 540, sz=40)
     elif not (in_hook and not COVER):
         for c in CH:
             if c[0]["c0"] <= t < c[0]["c1"]:
