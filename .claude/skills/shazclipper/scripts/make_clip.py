@@ -243,24 +243,9 @@ def frame(n):
         te = t - (DUR - END)
         S.moment(base, SPEC.get("end_line1", "NONTON FULL VIDEO"), S.GAME_Y + 170, 84, S.back(S.seg(te, .1, .35)), S.WHT)
         S.moment(base, SPEC.get("end_line2", "DI CHANNEL"), S.GAME_Y + 268, 96, S.back(S.seg(te, .2, .45)))
-        k = S.back(S.seg(te, .45, .75))
-        if k > 0:                                        # pill: streamer face, name, red "TONTON SEKARANG"
-            pw, ph = int(860 * k), 120; x0, y0 = int(S.SAFE_CX - pw / 2), S.GAME_Y + 360
-            pill = Image.new("RGBA", (max(pw, 2), ph), (0, 0, 0, 0)); dp = ImageDraw.Draw(pill)
-            dp.rounded_rectangle((0, 0, pw - 1, ph - 1), 60, fill=(12, 12, 14, 240), outline=(255, 255, 255, 60), width=2)
-            if k > .8:
-                face = cam.crop((540 - 230, 330 - 230, 540 + 230, 330 + 230)).resize((96, 96), Image.LANCZOS)
-                m = Image.new("L", (96, 96), 0); ImageDraw.Draw(m).ellipse((0, 0, 95, 95), fill=255)
-                pill.paste(face, (12, 12), m); dp.ellipse((12, 12, 107, 107), outline=(255, 255, 255, 220), width=3)
-                dp.text((124, ph / 2), S.STREAMER.upper(), font=S.F(32), fill=S.WHT + (255,), anchor="lm")
-                bx1 = pw - 16; bw = int(dp.textlength("TONTON SEKARANG", font=S.F(22))) + 70
-                dp.rounded_rectangle((bx1 - bw, 28, bx1, ph - 28), 16, fill=(220, 30, 30, 255))
-                dp.text((bx1 - bw + 16, ph / 2), "TONTON SEKARANG", font=S.F(22), fill=S.WHT + (255,), anchor="lm")
-                dp.polygon([(bx1 - 36, ph / 2 - 11), (bx1 - 36, ph / 2 + 11), (bx1 - 17, ph / 2)], fill=S.WHT + (255,))
-            base.alpha_composite(pill, (x0, y0))
-        if te > .9:
+        if te > .45:                                     # just the channel handle under it
             handle = SPEC.get("streamer_handle", "@" + S.STREAMER.replace(" ", ""))
-            S.subtitle_plain(base, f"Full video di {handle}", y=S.GAME_Y + 540, sz=40)
+            S.subtitle_plain(base, handle, y=S.GAME_Y + 390, sz=58)
     elif not (in_hook and not COVER):
         for c in CH:
             if c[0]["c0"] <= t < c[0]["c1"]:
