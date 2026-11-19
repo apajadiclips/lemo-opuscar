@@ -156,11 +156,17 @@ def keyed(st, key, default):
     for (t0, v0), (t1, v1) in zip(kf, kf[1:]):
         if t0 <= st <= t1: return S.lerp(v0, v1, S.eio(S.seg(st, t0, t1)))
     return kf[0][1] if st < kf[0][0] else kf[-1][1]
+def lift_dark(im):
+    """Night scenes: a gentle gamma lift when the picture is dark (mean luma < 70), stronger the darker it is."""
+    m = np.asarray(im.convert("L").resize((96, 96))).mean()
+    if m >= 70 or not SPEC.get("auto_brighten", True): return im
+    g = S.lerp(.62, .9, S.clamp((m - 20) / 50, 0, 1))               # gamma < 1 brightens shadows more than highlights
+    return im.point([int(255 * (i / 255) ** g) for i in range(256)] * 3)
 def game_panel(img, st, zoom):
     w = keyed(st, "w", 720) / zoom; h = w * S.GAME_H / S.W
     cx = keyed(st, "cx", SW * .45); cy = keyed(st, "cy", SH * .5)
     y0 = S.clamp(cy - .45 * h, 0, SH - h); x0 = S.clamp(cx - w / 2, 0, SW - w)
-    return S.panel(img, (x0, y0, x0 + w, y0 + h), S.W, S.GAME_H, 1.1)
+    return lift_dark(S.panel(img, (x0, y0, x0 + w, y0 + h), S.W, S.GAME_H, 1.1))
 def cam_panel(img, zoom):
     x0, y0, x1, y1 = CAM; cx, cy = (x0 + x1) / 2, (y0 + y1) / 2; hw, hh = (x1 - x0) / 2 / zoom, (y1 - y0) / 2 / zoom
     return S.panel(img, (cx - hw, cy - hh, cx + hw, cy + hh), S.W, S.CAM_H, 1.2)
