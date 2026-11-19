@@ -19,5 +19,7 @@ env = np.sqrt(uniform_filter1d((v ** 2).mean(1), int(.03 * sr)))
 open_ = maximum_filter1d((20 * np.log10(env + 1e-9) > a.gate).astype(float), int(.15 * sr))
 v *= uniform_filter1d(np.where(open_ > 0, 1.0, .16), int(.04 * sr))[:, None]
 sf.write(a.out, v, sr)
+bg = AF.resample(sum(out[i] for i, n in enumerate(m.sources) if n != "vocals"), m.samplerate, sr).numpy().T
+sf.write(a.out.replace(".wav", "_bg.wav"), bg, sr)            # the game's own sound, mixed back in quietly by make_clip
 db = lambda s: 20 * np.log10(np.sqrt((s ** 2).mean()) + 1e-9)
 print(f"voice {db(v):.1f} dB, removed {db(x - v[:len(x)]):.1f} dB of other sound -> {a.out}")
