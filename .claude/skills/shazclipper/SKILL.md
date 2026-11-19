@@ -22,6 +22,7 @@ The user runs the clipper channel **@shazclipper** (Malaysian; talks Malay, read
 | Shape | cover → hook (3 s, his own payoff line, `TONTON SAMPAI HABIS` pill low in the safe zone) → build-up → moment → optional slow replay (`REPLAY 0.5×`, red corners) → end card `MAU LAGI?` + `FOLLOW @shazclipper` |
 | Length | **61–75 s** (TikTok Creator Rewards needs > 60 s; also fine for Reels/Shorts). A 30–45 s Shorts cut is optional |
 | Loudness | −14 LUFS, true peak ≤ −1.5 dB |
+| Sexual content | **always blurred**: `make_clip.py` runs NudeNet (bundled model, offline) on every 1/3 s of the clip and the cover frame, and blurs the gameplay ±0.8 s around any exposed-nudity detection (`nsfw.json`). Add `"blur": [[a, b], …]` (VOD seconds) for anything it misses: kissing/sex scenes without nudity are not detected, so check suggestive scenes by eye. Never use a flagged frame as a cover. For a whole VOD, map it once (keyframes + NudeNet, ~27 ms/frame) and keep clips away from flagged scenes |
 
 Don'ts the user already rejected: two-line subtitles, green/mint words inside subtitles, Malay subtitle lines, bilingual lines, a second @shazclipper badge or a bottom watermark, background music or ambience, a gameplay band with a blurred bottom, Matcha Squishy (personal-use only).
 
@@ -31,7 +32,7 @@ Work in `films/<name>/` (git-ignored). Run from the library root.
 
 ```sh
 sh plugin/skills/lemo-opuscar/scripts/setup.sh deps                     # .venv with numpy/scipy/Pillow
-uv pip install --quiet --python .venv/bin/python faster-whisper edge-tts   # speech-to-text, cover voice
+uv pip install --quiet --python .venv/bin/python faster-whisper edge-tts nudenet   # speech-to-text, cover voice, nudity check
 # Demucs (voice separation) in its own venv, CPU torch:
 uv venv --quiet --python 3.12 /tmp/demucs-venv
 uv pip install --quiet --python /tmp/demucs-venv/bin/python --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple torch torchaudio

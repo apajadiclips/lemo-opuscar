@@ -18,6 +18,9 @@ for spec in args:
     os.makedirs(f"{mc.WORK}/frames", exist_ok=True)
     if not os.path.exists(f"{mc.WORK}/frames/cover.jpg"):
         mc.run(["ffmpeg", "-v", "error", "-y", "-ss", str(mc.COVER["frame"]), "-i", mc.SPEC["source"], "-frames:v", "1", "-vf", mc.ENHANCE, "-q:v", "2", f"{mc.WORK}/frames/cover.jpg"])
+    from nudenet import NudeDetector                 # the cover frame must be clean too: blur it if nudity is detected
+    bad = [d for d in NudeDetector().detect(f"{mc.WORK}/frames/cover.jpg") if d["class"] in mc.NSFW_CLASSES and d["score"] >= .45]
+    if bad: mc.BLUR.append((mc.COVER["frame"] - 1, mc.COVER["frame"] + 1)); print(f"{mc.NAME}: cover frame flagged {sorted({d['class'] for d in bad})} -> blurred; pick another frame")
     still = mc.cover_frame(min(.6, mc.COVER_DUR * .6)); jpg = f"{mc.WORK}/{mc.NAME}_cover.jpg"; still.save(jpg, quality=90)
     # the cover as a short video with its voice and the frame-0 hit
     vid, wav, mp4 = f"{mc.WORK}/cover_v.mp4", f"{mc.WORK}/audio/cover_mix.wav", f"{mc.WORK}/{mc.NAME}_cover.mp4"

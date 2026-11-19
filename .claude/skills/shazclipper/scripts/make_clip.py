@@ -9,7 +9,7 @@ import json, math, os, re, subprocess, sys, wave
 from functools import lru_cache
 from multiprocessing import Pool
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import shaz_style as S
@@ -74,6 +74,30 @@ def src_img(g, lt):
     f = lt * g.get("speed", 1.0) * SFPS; i = int(f); kf = f - i
     a = frame_img(g["k"], i)
     return Image.blend(a, frame_img(g["k"], i + 1), kf) if kf > .05 and g.get("speed", 1.0) < 1 else a
+
+# ---------- 1b. sexual-content check: NudeNet on the frames, plus manual "blur" ranges in the spec ----------
+NSFW_CLASSES = {"FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "BUTTOCKS_EXPOSED", "ANUS_EXPOSED"}
+BLUR = []                                     # [(a, b)] in VOD seconds where the gameplay is blurred
+def scan_nsfw():
+    """Every 1/3 s of every segment (and the cover frame), flag exposed-nudity detections; blur +-0.8 s around them.
+    Cached in nsfw.json. Manual ranges: "blur": [[a, b], ...] (VOD seconds) for anything the detector misses."""
+    p = f"{WORK}/nsfw.json"
+    if os.path.exists(p): hits = json.load(open(p))
+    else:
+        from nudenet import NudeDetector
+        det = NudeDetector(); hits = []
+        jobs = [(g["src"][0] + i / SFPS, f"{WORK}/frames/seg{g['k']:02d}/{i + 1:05d}.jpg") for g in SEGS for i in range(0, len(os.listdir(f"{WORK}/frames/seg{g['k']:02d}")), 10)]
+        if COVER: jobs.append((COVER.get("frame", SEGS[0]["src"][0]), f"{WORK}/frames/cover.jpg"))
+        for st, f in jobs:
+            found = [d for d in det.detect(f) if d["class"] in NSFW_CLASSES and d["score"] >= SPEC.get("nsfw_threshold", .45)]
+            if found: hits.append(dict(t=round(st, 2), classes=sorted({d["class"] for d in found}), score=round(max(d["score"] for d in found), 2)))
+        json.dump(hits, open(p, "w"), indent=1)
+    rng = sorted([(h["t"] - .8, h["t"] + .8) for h in hits] + [tuple(r) for r in SPEC.get("blur", [])])
+    for a, b in rng:                          # merge overlaps
+        if BLUR and a <= BLUR[-1][1]: BLUR[-1] = (BLUR[-1][0], max(BLUR[-1][1], b))
+        else: BLUR.append((a, b))
+    return hits
+def blurred(st): return any(a <= st <= b for a, b in BLUR)
 
 # ---------- 2. voice only, per segment ----------
 def prep_voice():
@@ -147,6 +171,7 @@ def cover_frame(t):
     img = Image.open(f"{WORK}/frames/cover.jpg").convert("RGB"); st = COVER.get("frame", SEGS[0]["src"][0])
     k = S.seg(t, 0, COVER_DUR)
     game = ImageEnhance.Brightness(game_panel(img, st, 1.12 + .08 * k)).enhance(.8)
+    if blurred(st): game = game.filter(ImageFilter.GaussianBlur(45))
     base = S.compose(cam_panel(img, 1.1 + .05 * k), game).convert("RGBA")
     lines = COVER.get("lines") or SPEC.get("hook", {}).get("lines", [])
     for i, line in enumerate(lines):
@@ -166,6 +191,7 @@ def frame(n):
     gz = punch * (S.lerp(1.25, 1.12, S.seg(lt, 0, g["dur"])) if lab == "hook" else S.lerp(1.05, 1.2, S.seg(lt, 0, g["dur"])) if lab == "replay" else 1)
     cam = cam_panel(img, 1.08 if lab in ("hook", "replay") else punch); game = game_panel(img, st, gz)
     if lab == "replay": game = ImageEnhance.Color(game).enhance(.6)
+    if blurred(st): game = game.filter(ImageFilter.GaussianBlur(45))         # sexual content: the gameplay is blurred
     im = S.compose(cam, game); d = ImageDraw.Draw(im, "RGBA")
     if lab == "replay":
         for (x, y, sx, sy) in ((40, S.GAME_Y + 30, 1, 1), (S.W - 40, S.GAME_Y + 30, -1, 1), (40, S.H - 40, 1, -1), (S.W - 40, S.H - 40, -1, -1)):
@@ -225,7 +251,9 @@ def master(video, wav, out):
     run(["ffmpeg", "-v", "error", "-y", "-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", af, "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out])
 
 if __name__ == "__main__":
-    os.makedirs(WORK, exist_ok=True); prep_frames(); prep_voice()
+    os.makedirs(WORK, exist_ok=True); prep_frames()
+    hits = scan_nsfw(); print(f"nsfw check: {len(hits)} flagged frames -> blur {[(round(a, 1), round(b, 1)) for a, b in BLUR]}")
+    prep_voice()
     voice = build_voice(); WORDS = prep_words(voice)
     fixes = {k.lower(): v for k, v in SPEC.get("fix_words", {}).items()}   # words Whisper mishears: {"menrobos": "menerobos"}
     for x in WORDS:
