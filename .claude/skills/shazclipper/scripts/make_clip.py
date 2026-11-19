@@ -1,0 +1,209 @@
+"""Make one @shazclipper clip from a stream VOD, driven by a spec JSON. See SKILL.md for the spec and the style rules.
+
+  python make_clip.py spec.json            # full clip -> <work>/<name>.mp4
+  python make_clip.py spec.json --stills 0.5 6 12   # review frames (+ *_safe.jpg with the safe-zone overlay)
+
+Pipeline: enhanced frames per segment (nlmeans + CAS) -> voice only per segment (Demucs, no back sound) ->
+Whisper word times on the clip's own voice -> plain subtitles + moment words in Titan One mint -> mix -> -14 LUFS."""
+import json, math, os, re, subprocess, sys, wave
+from functools import lru_cache
+from multiprocessing import Pool
+import numpy as np
+from PIL import Image, ImageDraw, ImageEnhance
+
+HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+import shaz_style as S
+LIB = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
+sys.path.insert(0, os.path.join(LIB, "core", "audio")); import sfx
+FPS, SFPS = 24, 30.0
+# picture clean-up: strong (nlmeans) for low-res screen recordings, light and fast (hqdn3d) for 1080p+ VODs
+ENH_LOW = "nlmeans=s=2:p=5:r=9,cas=strength=0.6,eq=contrast=1.05:saturation=1.1"
+ENH_HD = "hqdn3d=1.5:1.5:6:6,cas=strength=0.5,eq=contrast=1.05:saturation=1.1"
+
+SPEC = json.load(open(sys.argv[1])); WORK = os.path.abspath(SPEC.get("work", os.path.dirname(os.path.abspath(sys.argv[1]))))
+NAME = SPEC["name"]; S.STREAMER = SPEC.get("streamer", S.STREAMER)
+if SPEC.get("moment_words"): S.MOMENT_WORDS = S.MOMENT_WORDS + "|" + SPEC["moment_words"]
+SEGS = SPEC["segments"]                       # [{src: [a, b], speed: 1, label: hook|clip|replay}]
+for k, g in enumerate(SEGS): g["k"] = k; g["dur"] = (g["src"][1] - g["src"][0]) / g.get("speed", 1.0)
+END = 2.6 if SPEC.get("end_card", True) else 0
+DUR = sum(g["dur"] for g in SEGS) + END
+o = 0.0
+for g in SEGS: g["o0"] = o; o += g["dur"]
+SW, SH = SPEC.get("source_size", [1920, 1080])
+ENHANCE = SPEC.get("enhance") or (ENH_HD if SH >= 1000 else ENH_LOW)
+CAM = SPEC["cam"]                             # facecam box in source px [x0, y0, x1, y1]
+GAME = SPEC.get("game", {})                   # crop width and centre keyframes (source time -> cx, cy)
+
+def run(cmd): subprocess.run(cmd, check=True)
+def seg_at(t):
+    for g in SEGS:
+        if t < g["o0"] + g["dur"]: return g, (t - g["o0"])
+    g = SEGS[-1]; return g, g["dur"] - 1e-3
+
+# ---------- 1. enhanced frames per segment ----------
+def prep_frames():
+    for g in SEGS:
+        d = f"{WORK}/frames/seg{g['k']:02d}"
+        if os.path.isdir(d) and len(os.listdir(d)) >= int((g["src"][1] - g["src"][0]) * SFPS) - 2: continue
+        os.makedirs(d, exist_ok=True); a, b = g["src"]
+        run(["ffmpeg", "-v", "error", "-y", "-ss", str(a), "-t", str(b - a), "-i", SPEC["source"], "-vf", f"fps={SFPS:g},{ENHANCE}", "-q:v", "2", f"{d}/%05d.jpg"])
+@lru_cache(maxsize=24)
+def frame_img(k, i):
+    d = f"{WORK}/frames/seg{k:02d}"; n = len(os.listdir(d))
+    return Image.open(f"{d}/{max(0, min(i, n - 1)) + 1:05d}.jpg").convert("RGB")
+def src_img(g, lt):
+    f = lt * g.get("speed", 1.0) * SFPS; i = int(f); kf = f - i
+    a = frame_img(g["k"], i)
+    return Image.blend(a, frame_img(g["k"], i + 1), kf) if kf > .05 and g.get("speed", 1.0) < 1 else a
+
+# ---------- 2. voice only, per segment ----------
+def prep_voice():
+    py = os.environ.get("DEMUCS_PY") or SPEC.get("demucs_py")
+    for g in SEGS:
+        raw, voc = f"{WORK}/audio/seg{g['k']:02d}.wav", f"{WORK}/audio/seg{g['k']:02d}_voice.wav"
+        if os.path.exists(voc): continue
+        os.makedirs(f"{WORK}/audio", exist_ok=True); a, b = g["src"]
+        run(["ffmpeg", "-v", "error", "-y", "-ss", str(a), "-t", str(b - a), "-i", SPEC["source"], "-vn", "-ac", "2", "-ar", "48000", raw])
+        if py and SPEC.get("remove_back_sound", True): run([py, f"{HERE}/separate_voice.py", raw, voc])
+        else: os.replace(raw, voc)
+def read_wav(p):
+    with wave.open(p) as w: return np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").reshape(-1, w.getnchannels()).astype(np.float64) / 32768
+def build_voice():
+    """The clip's voice track: segments at speed 1 keep his voice; slowed replays are voiceless (a whoosh in the mix)."""
+    buf = np.zeros((int(DUR * 48000), 2))
+    for g in SEGS:
+        if abs(g.get("speed", 1.0) - 1) > .01: continue
+        v = read_wav(f"{WORK}/audio/seg{g['k']:02d}_voice.wav"); s = int(g["o0"] * 48000); n = min(len(v), len(buf) - s)
+        fade = np.ones(n); m = min(480, n // 2); fade[:m] = np.linspace(0, 1, m); fade[-m:] = np.linspace(1, 0, m)
+        buf[s:s + n] += v[:n] * fade[:, None]
+    return buf
+
+# ---------- 3. words: Whisper on the clip's own voice ----------
+def prep_words(voice):
+    p = f"{WORK}/words.json"
+    if os.path.exists(p): return json.load(open(p))
+    from faster_whisper import WhisperModel
+    mono = voice.mean(1); x = mono[::3].astype(np.float32)                    # 48 kHz -> 16 kHz
+    m = WhisperModel(SPEC.get("whisper_model", "medium"), device="cpu", compute_type="int8")
+    segs, _ = m.transcribe(x, language=SPEC.get("lang", "id"), word_timestamps=True, beam_size=5)
+    words = [dict(w=w.word.strip(), t0=round(w.start, 2), t1=round(w.end, 2)) for s in segs for w in s.words if w.word.strip()]
+    words = [w for w in words if not re.fullmatch(r"\W*", w["w"])]
+    json.dump(words, open(p, "w"), ensure_ascii=False, indent=1); return words
+def chunks(words):
+    """Phrases: split on punctuation or a pause > 0.35 s, merge pieces shorter than 0.5 s (max 5 words)."""
+    out, cur = [], []
+    for i, x in enumerate(words):
+        cur.append(x); gap = words[i + 1]["t0"] - x["t1"] if i + 1 < len(words) else 9
+        if re.search(r"[.,!?]$", x["w"]) or gap > .35: out.append(cur); cur = []
+    if cur: out.append(cur)
+    merged = []
+    for c in out:
+        if merged and merged[-1][-1]["t1"] - merged[-1][0]["t0"] < .5 and len(merged[-1]) + len(c) <= 5 and c[0]["t0"] - merged[-1][-1]["t1"] < .5: merged[-1] += c
+        else: merged.append(c)
+    for j, c in enumerate(merged):
+        nxt = merged[j + 1][0]["t0"] if j + 1 < len(merged) else None
+        c[0]["c0"] = c[0]["t0"]; c[0]["c1"] = nxt if nxt is not None and nxt - c[-1]["t1"] < .9 else c[-1]["t1"] + .6
+    return merged
+
+# ---------- 4. picture ----------
+def keyed(st, key, default):
+    kf = GAME.get(key)
+    if not kf: return default
+    if isinstance(kf, (int, float)): return kf
+    for (t0, v0), (t1, v1) in zip(kf, kf[1:]):
+        if t0 <= st <= t1: return S.lerp(v0, v1, S.eio(S.seg(st, t0, t1)))
+    return kf[0][1] if st < kf[0][0] else kf[-1][1]
+def game_panel(img, st, zoom):
+    w = keyed(st, "w", 720) / zoom; h = w * S.GAME_H / S.W
+    cx = keyed(st, "cx", SW * .45); cy = keyed(st, "cy", SH * .5)
+    y0 = S.clamp(cy - .45 * h, 0, SH - h); x0 = S.clamp(cx - w / 2, 0, SW - w)
+    return S.panel(img, (x0, y0, x0 + w, y0 + h), S.W, S.GAME_H, 1.1)
+def cam_panel(img, zoom):
+    x0, y0, x1, y1 = CAM; cx, cy = (x0 + x1) / 2, (y0 + y1) / 2; hw, hh = (x1 - x0) / 2 / zoom, (y1 - y0) / 2 / zoom
+    return S.panel(img, (cx - hw, cy - hh, cx + hw, cy + hh), S.W, S.CAM_H, 1.2)
+
+WORDS, CH, BIG = [], [], []
+def frame(n):
+    t = n / FPS; end = END and t >= DUR - END
+    g, lt = seg_at(min(t, DUR - END - 1e-3)) if END else seg_at(t)
+    if end: lt = g["dur"] - 1e-3
+    st = g["src"][0] + lt * g.get("speed", 1.0); img = src_img(g, lt); lab = g.get("label", "clip")
+    punch = 1 + .06 * math.exp(-lt / .15) + .06 * max([math.exp(-(t - e) / .15) for e in BIG if 0 <= t - e < 1] + [0])
+    gz = punch * (S.lerp(1.25, 1.12, S.seg(lt, 0, g["dur"])) if lab == "hook" else S.lerp(1.05, 1.2, S.seg(lt, 0, g["dur"])) if lab == "replay" else 1)
+    cam = cam_panel(img, 1.08 if lab in ("hook", "replay") else punch); game = game_panel(img, st, gz)
+    if lab == "replay": game = ImageEnhance.Color(game).enhance(.6)
+    im = S.compose(cam, game); d = ImageDraw.Draw(im, "RGBA")
+    if lab == "replay":
+        for (x, y, sx, sy) in ((40, S.GAME_Y + 30, 1, 1), (S.W - 40, S.GAME_Y + 30, -1, 1), (40, S.H - 40, 1, -1), (S.W - 40, S.H - 40, -1, -1)):
+            d.line([(x, y), (x + 80 * sx, y)], fill=S.RED, width=10); d.line([(x, y), (x, y + 80 * sy)], fill=S.RED, width=10)
+        d.rounded_rectangle((S.SAFE[0] + 30, S.GAME_Y + 60, S.SAFE[0] + 360, S.GAME_Y + 126), 33, fill=(0, 0, 0, 170))
+        if int(t * 2) % 2 == 0: d.ellipse((S.SAFE[0] + 52, S.GAME_Y + 80, S.SAFE[0] + 78, S.GAME_Y + 106), fill=S.RED)
+        d.text((S.SAFE[0] + 94, S.GAME_Y + 93), f"REPLAY {g.get('speed', .5):g}×", font=S.F(34), fill=S.WHT, anchor="lm")
+    if end: d.rectangle((0, S.GAME_Y, S.W, S.H), fill=(0, 0, 0, int(150 * S.seg(t, DUR - END, DUR - END + .4))))
+    base = im.convert("RGBA")
+    hook = SPEC.get("hook")
+    if hook and t < SPEC.get("hook_dur", 3.0):            # hook: Titan One mint, in the safe zone, over the gameplay top
+        for i, line in enumerate(hook["lines"]):
+            S.moment(base, line, S.GAME_Y + 130 + i * 118, 90 if i == 0 else 120, S.back(S.seg(t, .1 * i, .25 + .1 * i)))
+        if hook.get("cta"):
+            d2 = ImageDraw.Draw(base); s = hook["cta"]; tw = d2.textlength(s, font=S.F(32)); y = S.GAME_Y + 100 + len(hook["lines"]) * 118 + 30
+            d2.rounded_rectangle((S.SAFE_CX - tw / 2 - 26, y, S.SAFE_CX + tw / 2 + 26, y + 60), 30, fill=S.RED + (235,))
+            d2.text((S.SAFE_CX, y + 30), s, font=S.F(32), fill=S.WHT, anchor="mm")
+    for r in SPEC.get("reactions", []):                    # [{t0, t1, text}] in clip time: a moment line over the facecam
+        if r["t0"] <= t < r["t1"]: S.moment(base, r["text"], S.DIV_Y - 80, r.get("size", 60))
+    if end:
+        S.moment(base, SPEC.get("end_text", "MAU LAGI?"), S.GAME_Y + 250, 110, S.back(S.seg(t, DUR - END + .2, DUR - END + .5)))
+        kk = S.back(S.seg(t, DUR - END + .5, DUR - END + .8)); w2 = int(680 * kk); d2 = ImageDraw.Draw(base)
+        d2.rounded_rectangle((S.SAFE_CX - w2 / 2, S.GAME_Y + 390, S.SAFE_CX + w2 / 2, S.GAME_Y + 496), 53, fill=S.MINT + (255,))
+        if kk > .7: d2.text((S.SAFE_CX, S.GAME_Y + 443), "FOLLOW " + S.CHANNEL, font=S.F(52), fill=S.BLK, anchor="mm")
+    elif not (hook and t < SPEC.get("hook_dur", 3.0)):
+        for c in CH:
+            if c[0]["c0"] <= t < c[0]["c1"]:
+                S.subtitle(base, t, " ".join(x["w"] for x in c), None, times=[x["t0"] for x in c], t_on=c[0]["t0"])
+    im = base.convert("RGB")
+    for g2 in SEGS[1:]:
+        if g2["o0"] <= t < g2["o0"] + .08: im = Image.blend(im, Image.new("RGB", (S.W, S.H), S.WHT), .3 * (1 - (t - g2["o0"]) / .08))
+    return im
+
+def mix(voice):
+    buf = voice.copy()
+    for g in SEGS[1:]: sfx.add(buf, sfx.whoosh(.3), g["o0"] - .15, .3)
+    for g in SEGS:
+        if g.get("label") == "replay": sfx.add(buf, sfx.whoosh(.6), g["o0"] - .3, .4)
+    for b in BIG: sfx.add(buf, sfx.thump(f=60), b, .3)
+    if END: sfx.add(buf, sfx.thump(f=60), DUR - END, .4)
+    buf /= np.abs(buf).max() / .9
+    p = f"{WORK}/audio/mix.wav"
+    with wave.open(p, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000); w.writeframes((np.clip(buf, -1, 1) * 32767).astype("<i2").tobytes())
+    return p
+
+def master(video, wav, out):
+    j = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", wav, "-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"], capture_output=True, text=True).stderr
+    m = json.loads(j[j.rindex("{"):j.rindex("}") + 1])
+    af = (f"loudnorm=I=-14:TP=-1.5:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}:"
+          f"measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true,aresample=192000,alimiter=limit=0.7:attack=1:release=60:level=false,aresample=48000")
+    run(["ffmpeg", "-v", "error", "-y", "-i", video, "-i", wav, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", af, "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out])
+
+if __name__ == "__main__":
+    os.makedirs(WORK, exist_ok=True); prep_frames(); prep_voice()
+    voice = build_voice(); WORDS = prep_words(voice)
+    fixes = {k.lower(): v for k, v in SPEC.get("fix_words", {}).items()}   # words Whisper mishears: {"menrobos": "menerobos"}
+    for x in WORDS:
+        core = re.sub(r"[^\w-]", "", x["w"]).lower()
+        if core in fixes: x["w"] = x["w"].lower().replace(core, fixes[core])
+    CH = chunks(WORDS)
+    BIG = [x["t0"] for x in WORDS if S.is_moment(x["w"])]
+    print(f"{NAME}: {DUR:.1f} s, {len(WORDS)} words, {len(CH)} subtitle phrases, moments at {[round(b, 1) for b in BIG]}")
+    if "--stills" in sys.argv:
+        os.makedirs(f"{WORK}/stills", exist_ok=True)
+        for ts in sys.argv[sys.argv.index("--stills") + 1:]:
+            im = frame(round(float(ts) * FPS)); im.save(f"{WORK}/stills/{NAME}_{ts}.jpg", quality=88); S.safe_overlay(im).save(f"{WORK}/stills/{NAME}_{ts}_safe.jpg", quality=80)
+        sys.exit(0)
+    vid = f"{WORK}/{NAME}_video.mp4"
+    ff = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{S.W}x{S.H}", "-r", str(FPS), "-i", "-",
+                           "-c:v", "libx264", "-crf", "17", "-preset", "slow", "-pix_fmt", "yuv420p", vid], stdin=subprocess.PIPE)
+    with Pool(int(os.environ.get("WORKERS", 4))) as p:
+        for im in p.imap(frame, range(int(DUR * FPS)), chunksize=6): ff.stdin.write(im.tobytes())
+    ff.stdin.close(); ff.wait()
+    master(vid, mix(voice), f"{WORK}/{NAME}.mp4"); os.remove(vid); print(f"{WORK}/{NAME}.mp4")
