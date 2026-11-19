@@ -66,13 +66,18 @@ Network: the `lemo-opuscar` environment allows drive.google.com, drive.userconte
     "moment_words": "polisi|menerobos", "fix_words": {"menrobos": "menerobos"}, "end_card": true}
    ```
    `game.w` = crop width in source px (smaller = closer; ~980 for a 1080p VOD shows the character whole, 720 is a close-up); `cx`/`cy` = numbers or keyframes `[[source_time, value], …]` following the character, who should sit ~45 % down the panel. Segment times are VOD seconds. Replays are voiceless (a whoosh instead). `fix_words` corrects words Whisper mishears (check `words.json`). `cover.frame` = the VOD second to freeze (pick the most dramatic frame); `cover.say` = the sentence the voice reads (keep it ≤ 6 words so it fits ~1 s); other voices: `id-ID-GadisNeural` (female), `ms-MY-OsmanNeural` / `ms-MY-YasminNeural` (Malay). Delete `words.json` after adding or changing the cover (the timeline shifts).
-6. **Review stills, then render:**
+6. **Covers first, for approval.** The user approves covers before any full render:
+   ```sh
+   .venv/bin/python .claude/skills/shazclipper/scripts/cover_preview.py films/<name>/clip0{2,3,4}/spec.json --sheet films/<name>/covers.jpg
+   ```
+   Send the sheet plus each `<name>_cover.mp4` (the cover with its voice). Keep `cover.say` short and without commas: a comma adds a pause (~0.4 s) and a cover over ~1.8 s feels slow. Match the voice to the cover text.
+7. **Review stills, then render:**
    ```sh
    .venv/bin/python .claude/skills/shazclipper/scripts/make_clip.py films/<name>/clip01/spec.json --stills 1 10 30 60
    .venv/bin/python .claude/skills/shazclipper/scripts/make_clip.py films/<name>/clip01/spec.json
    ```
    Check the `_safe.jpg` stills: every text inside the green box, the subject not covered, the hook readable. The first run caches frames, voice and words under the clip folder; delete `words.json` after changing segments.
-7. **Deliver** `films/<name>/clipNN/<name>.mp4` with SendUserFile, one line per clip: what happens, length, loudness. Remind once: clips follow the streamer's clipper-programme terms; credit stays in the bar.
+8. **Deliver** `films/<name>/clipNN/<name>.mp4` with SendUserFile, one line per clip: what happens, length, loudness. Remind once: clips follow the streamer's clipper-programme terms; credit stays in the bar.
 
 ## Monetisation notes (check the live rules; they change)
 
